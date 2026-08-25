@@ -8,10 +8,10 @@ tokens stay exactly where they are.
 
 ```console
 $ ccex ls
-ACCOUNT              EMAIL                          TIER     ACCESS-TOKEN             REFRESH-TOKEN
-*default             ada@example.com                max_5x   6h56m                    26d (20-09)
- personal            ada.lovelace@gmail.com         pro      stale                    27d (21-09)
- client-acme         ada@acme.example               max_5x   4h02m                    28d (22-09)
+ACCOUNT         EMAIL                    TIER    TOKEN    REFRESH      5H            WEEKLY           CHECKED
+*default        ada@example.com          max_5x  6h56m    26d (20-09)  41% - 3h21m   23% - 14h41m     live
+ personal       ada.lovelace@gmail.com   pro     stale    27d (21-09)  4% - 1h41m    18% - 18h41m     8m ago
+ client-acme    ada@acme.example         max_5x  4h02m    28d (22-09)  9% - 2h51m    36% - 4d 8h41m   4m ago
 
 $ ccex use client-acme
 ccex: ada@example.com -> parked as 'ada'; ada@acme.example -> live
@@ -33,7 +33,6 @@ Needs `bash`, `python3`, and the `claude` CLI on your PATH.
 | --- | --- |
 | `ccex ls` | list accounts; `*` marks the live one |
 | `ccex use <account>` | make that account live (`-n` / `--dry-run` to plan only) |
-| `ccex limits [<account>]` | 5-hour and weekly usage, with reset times (`--all` for every account) |
 | `ccex add <name>` | browser login for another account, parked for later |
 
 `<account>` is a slot name, a full email, or any unambiguous prefix of either — so
@@ -43,6 +42,7 @@ Needs `bash`, `python3`, and the `claude` CLI on your PATH.
 
 | Command | What it does |
 | --- | --- |
+| `ccex limits [<account>]` | the same limits in full, with reset clock times |
 | `ccex status <account>` | `claude auth status` for one account |
 | `ccex login \| logout <account>` | re-auth or drop one account's credential |
 | `ccex run <account> [args]` | launch `claude` as a parked account, leaving the live one alone |
@@ -53,37 +53,42 @@ Needs `bash`, `python3`, and the `claude` CLI on your PATH.
 
 ## Knowing when you'll hit a limit
 
-Switching accounts is only useful if you know which one has room left, so `ccex use`
-reports the account it just switched you to:
+The `5H` and `WEEKLY` columns are how much of each window you've burned and how long until
+it resets — `41% - 3h21m`. `CHECKED` says how old that is; `live` means a session is open
+on that account and reporting continuously. `ccex use` prints the same thing for the
+account it just switched you to:
 
 ```console
 $ ccex use client-acme
 ccex: ada@example.com -> parked as 'ada'; ada@acme.example -> live
-ccex: limits for ada@acme.example (checked just now, from the running session)
-        5h      4% used, resets 25-08 11:59 (1h49m)
+ccex: limits for ada@acme.example (live, from the running session)
+        5h      4% used, resets 11:59 (1h49m)
         weekly  18% used, resets 26-08 04:59 (18h49m)
 ```
 
-`ccex limits` asks the same question any time, and `ccex limits --all` asks it of every
-account. Pass `--no-check` to `use` if you'd rather it stayed quiet.
+Pass `--no-check` to `use` if you'd rather it stayed quiet.
 
 ### Where the numbers come from
 
-`ccex` will not spend your quota to tell you about your quota. It takes the first answer
-it can get, in this order:
+`ccex` will not spend your quota to tell you about your quota, and it will not start a
+session on an account you aren't using. It takes the first answer it can get:
 
-1. **A session you already have open.** Claude Code hands its statusline a
-   `rate_limits` block on every render. If you route that through `ccex record` (below),
-   any running session keeps its own account's numbers current for free.
-2. **The last known numbers**, if they were fetched in the past five minutes — by a
-   previous `ccex limits`, or by you opening `/usage` yourself.
-3. **Only if neither exists**: `ccex` starts Claude Code on that account in a pty, opens
-   `/usage`, reads the answer and quits. It takes about eight seconds, sends no prompt and
-   costs nothing — but it is a real session start, so it's the last resort, not the first
-   move. `--force` demands it explicitly.
+1. **The clock.** A window whose reset time has passed is 0% used. That needs no asking,
+   so accounts you haven't touched in a while cost nothing to report accurately.
+2. **A session you already have open.** Claude Code hands its statusline a `rate_limits`
+   block on every render. Route that through `ccex record` (below) and any running session
+   keeps its own account's numbers current for free.
+3. **The last known numbers**, if they were fetched in the past five minutes.
+4. **Only for the account you're actually running**, and only if none of the above
+   answered: `ccex` starts Claude Code in a pty, opens `/usage`, reads the answer and
+   quits. About eight seconds, no prompt sent, no cost — but it is a real session start,
+   so it's the last resort. `--force` demands it.
 
-If a session is already open on an account but you haven't installed the recorder, `ccex`
-would rather show you slightly old numbers than start a second session behind your back.
+Parked accounts are never launched. Their numbers sit at whatever they were when that
+account was last live, ticking down to 0% as their windows expire, and get a real check
+the moment you `ccex use` them. If a session is already open on the live account but you
+haven't installed the recorder, `ccex` shows slightly old numbers rather than starting a
+second session behind your back.
 
 ### Live numbers from your statusline
 
@@ -108,7 +113,7 @@ last switch, so a session that predates a switch can never be misread as the new
 hours and Claude Code silently renews it, so `stale` is normal and harmless — it just
 means nothing has used that account lately.
 
-**TIER** is your plan's rate-limit tier with the boilerplate trimmed — `max_5x` rather
+**TOKEN** and **REFRESH** are the two OAuth clocks. **TIER** is your plan's rate-limit tier with the boilerplate trimmed — `max_5x` rather
 than `default_claude_max_5x`.
 
 **REFRESH-TOKEN** is the one that matters. It's what buys new access tokens, it lasts on

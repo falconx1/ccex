@@ -271,10 +271,19 @@ try:
         ra = v.get("resets_at")
         util[k] = {"utilization": v.get("used_percentage"),
                    "resets_at": datetime.datetime.fromtimestamp(ra, datetime.timezone.utc).isoformat() if ra else None}
-    tp = payload.get("transcript_path") or ""
-    try:
-        started = int(os.path.getctime(tp) * 1000)   # a session predating a switch is not this account
-    except OSError:
+    started, pid = None, os.getppid()             # a session predating a switch is not this account
+    for _ in range(4):                            # statusline runs under the session; walk up to it
+        try:
+            with open("/proc/%d/cmdline" % pid, "rb") as f:
+                argv = f.read().split(b"\0")
+            if argv and os.path.basename(argv[0].decode("utf8", "replace")) == "claude":
+                started = int(os.path.getctime("/proc/%d" % pid) * 1000)
+                break
+            with open("/proc/%d/stat" % pid) as f:
+                pid = int(f.read().split(") ", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+    if started is None:
         started = int(time.time() * 1000)
     d = os.path.join(root, ".usage")
     os.makedirs(d, exist_ok=True)
@@ -300,6 +309,7 @@ base = os.path.expanduser("~/.claude")
 quiet = "--quiet" in argv
 every = "--all" in argv
 force = "--force" in argv
+tsv = "--tsv" in argv
 args = [a for a in argv if not a.startswith("-")]
 
 def load(p):
@@ -352,8 +362,11 @@ def live_sessions(d):
             with open("/proc/%s/environ" % pid, "rb") as f:
                 env = dict(e.split(b"=", 1) for e in f.read().split(b"\0") if b"=" in e)
             cd = env.get(b"CLAUDE_CONFIG_DIR", b"").decode("utf8", "replace") or base
-            if os.path.realpath(cd) == os.path.realpath(d):
-                out.append(int(pid))
+            if os.path.realpath(cd) != os.path.realpath(d):
+                continue
+            if os.path.getctime("/proc/" + pid) * 1000 < switched_at():
+                continue      # started before the last switch, so it still holds the old account
+            out.append(int(pid))
         except (OSError, ValueError):
             continue
     return out
@@ -379,6 +392,8 @@ def cached(d):
 
 def hm(sec):
     sec = int(sec)
+    if sec >= 86400:
+        return "%dd %dh%02dm" % (sec // 86400, sec % 86400 // 3600, sec % 3600 // 60)
     return "%dh%02dm" % (sec // 3600, sec % 3600 // 60) if sec >= 3600 else "%dm" % (sec // 60)
 
 def trusted_dir(cfg):
@@ -459,18 +474,38 @@ def probe(d, timeout=50):
         pass
     return "ok" if (cached(d).get("fetchedAtMs") or 0) > before else "timeout"
 
-def window(d, key):
+def reset_at(d, key):
     v = (cached(d)["utilization"] or {}).get(key)
     if not isinstance(v, dict) or v.get("utilization") is None:
+        return None, None
+    ra = v.get("resets_at")
+    return v["utilization"], datetime.datetime.fromisoformat(ra).timestamp() if ra else None
+
+def window(d, key):
+    pct, t = reset_at(d, key)
+    if pct is None:
         return "-"
-    pct, ra = v["utilization"], v.get("resets_at")
-    if not ra:
+    if t is None:
         return "%d%% used" % pct
-    t = datetime.datetime.fromisoformat(ra).timestamp()
     left = t - time.time()
+    when = time.strftime("%H:%M" if time.strftime("%d-%m") == time.strftime("%d-%m", time.localtime(t))
+                         else "%d-%m %H:%M", time.localtime(t))
     if left <= 0:
-        return "%d%% used - window rolled over" % pct
-    return "%d%% used, resets %s (%s)" % (pct, time.strftime("%d-%m %H:%M", time.localtime(t)), hm(left))
+        return "0%% used, reset %s" % when
+    return "%d%% used, resets %s (%s)" % (pct, when, hm(left))
+
+def compact(d, key):
+    pct, t = reset_at(d, key)
+    if pct is None:
+        return "-"
+    if t is None:
+        return "%d%%" % pct
+    left = t - time.time()
+    return "%d%% - %s" % (pct, hm(left)) if left > 0 else "0%"
+
+def still_counting(d):
+    """True while some window we know about has not yet run out - i.e. old numbers still lie."""
+    return any(t and t > time.time() for _, t in (reset_at(d, k) for k in ("five_hour", "seven_day")))
 
 def age(d):
     c = cached(d)
@@ -507,30 +542,37 @@ rows, notes = [], []
 for name, d in targets:
     have = cached(d)
     fresh = have["fetchedAtMs"] and time.time() - have["fetchedAtMs"] / 1000 < 300
-    if force:
-        st = probe(d)
-    elif have["source"] == "session" and live_sessions(d):
+    if have["source"] == "session" and live_sessions(d):
         st = "ok"                      # a session is open on this account and reporting; touch nothing
-    elif fresh:
+    elif fresh and not force:
         st = "ok"                      # someone checked moments ago; no reason to ask again
-    elif live_sessions(d):
+    elif not is_base(d):
+        st = "parked"                  # not the account you are running; leave it alone until it is
+    elif live_sessions(d) and not force:
         st = "unhooked"                # don't start a second session behind a running one
     else:
         st = probe(d)                  # last resort: open the TUI just long enough to read /usage
-    if st != "ok":
+    if st == "parked" and not still_counting(d):
+        st = "ok"                      # every window it knew about has since reset, so 0% is certain
+    if st not in ("ok", "parked"):
         notes.append("ccex: %s: %s" % (name, NOTE.get(st, st)))
-    rows.append((name, email_for(d), window(d, "five_hour"), window(d, "seven_day"), age(d)))
+    rows.append((name, email_for(d), window(d, "five_hour"), window(d, "seven_day"),
+                 "live" if have["source"] == "session" and live_sessions(d) else age(d)))
 
-if quiet and len(rows) == 1:
+if tsv:
+    for name, d in targets:
+        print("\t".join([name, compact(d, "five_hour"), compact(d, "seven_day"),
+                         "live" if cached(d)["source"] == "session" and live_sessions(d) else age(d)]))
+elif quiet and len(rows) == 1:
     name, email, five, seven, a = rows[0]
-    print("ccex: limits for %s (checked %s)" % (email, a))
+    print("ccex: limits for %s (%s)" % (email, "live, from the running session" if a == "live" else "checked " + a))
     print("        5h      %s" % five)
     print("        weekly  %s" % seven)
 else:
-    print("%-20s %-30s %-36s %s" % ("ACCOUNT", "EMAIL", "5-HOUR", "WEEKLY (ALL MODELS)"))
+    print("%-20s %-30s %-31s %-38s %s" % ("ACCOUNT", "EMAIL", "5-HOUR", "WEEKLY", "CHECKED"))
     for name, email, five, seven, a in rows:
         mark = "*" if name == "default" else " "
-        print("%s%-19s %-30s %-36s %s" % (mark, name, email, five, seven))
+        print("%s%-19s %-30s %-31s %-38s %s" % (mark, name, email, five, seven, a))
 for n in notes:
     print(n, file=sys.stderr)
 LIMPY
@@ -598,12 +640,18 @@ cmd=${1:-ls}; shift || true
 case "$cmd" in
   ls|list)
     cur="${CLAUDE_CONFIG_DIR:-$BASE}"
-    printf '%-20s %-30s %-8s %-24s %s\n' ACCOUNT EMAIL TIER ACCESS-TOKEN REFRESH-TOKEN
+    declare -A FIVE SEVEN WHEN
+    while IFS=$'\t' read -r n f s w; do FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; done \
+      < <(limits --all --tsv 2>/dev/null)
+    printf '%-20s %-30s %-7s %-8s %-12s %-13s %-16s %s\n' \
+      ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY CHECKED
     while read -r p; do
       d=$(dir_for "$p")
       mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
       IFS=$'\t' read -r email tier state rstate < <(info "$d")
-      printf '%s%-19s %-30s %-8s %-24s %s\n' "$mark" "$p" "$email" "$tier" "$state" "$rstate"
+      printf '%s%-19s %-30s %-7s %-8s %-12s %-13s %-16s %s\n' \
+        "$mark" "$p" "$email" "$tier" "$state" "$rstate" \
+        "${FIVE[$p]:--}" "${SEVEN[$p]:--}" "${WHEN[$p]:--}"
     done < <(profiles)
     ;;
   add)
