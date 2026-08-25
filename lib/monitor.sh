@@ -106,22 +106,23 @@ UNITEOF
       [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" = yes ] || \
         printf 'ccex: the timer runs while you are logged in; `loginctl enable-linger %s` to keep it running otherwise\n' "$USER" >&2
       ;;
-    stop|uninstall)
+    stop)
       systemctl --user disable --now ccex-rotate.timer 2>/dev/null || true
-      [ "$sub" = uninstall ] && rm -f "$UNIT/ccex-rotate.timer" "$UNIT/ccex-rotate.service" && systemctl --user daemon-reload
-      printf 'ccex: monitor %s\n' "$([ "$sub" = uninstall ] && echo removed || echo stopped)"
+      rm -f "$UNIT/ccex-rotate.timer" "$UNIT/ccex-rotate.service"
+      systemctl --user daemon-reload
+      printf 'ccex: monitor stopped and removed; `ccex monitor install` puts it back\n'
       ;;
     status)
       if systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1; then
         systemctl --user list-timers ccex-rotate.timer --no-pager | sed -n '1,2p'
       else
-        printf 'ccex: monitor not installed (ccex monitor install --every 5m --at 80)\n'
+        printf 'ccex: monitor not installed (ccex monitor install)\n'
       fi
       [ -f "$ROOT/.usage/.monitor-last" ] && { printf '\nlast check:\n'; sed 's/^/  /' "$ROOT/.usage/.monitor-last"; }
       [ -s "$ROOT/.usage/rotate.log" ] && { printf '\nrotations:\n'; tail -5 "$ROOT/.usage/rotate.log" | sed 's/^/  /'; }
       return 0
       ;;
     log) [ -s "$ROOT/.usage/rotate.log" ] && cat "$ROOT/.usage/rotate.log" || printf 'ccex: no rotations logged yet\n' ;;
-    *) die "usage: ccex monitor watch|install|status|stop|uninstall|tick|log" ;;
+    *) die "usage: ccex monitor install|watch|status|log|stop" ;;
   esac
 }

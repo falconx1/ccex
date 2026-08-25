@@ -49,14 +49,14 @@ Needs `bash`, `python3`, and the `claude` CLI on your PATH.
 
 | Command | What it does |
 | --- | --- |
-| `ccex limits [<account>]` | the same limits in full, with reset clock times |
-| `ccex status <account>` | `claude auth status` for one account |
-| `ccex login \| logout <account>` | re-auth or drop one account's credential |
+| `ccex ls <account>` | that account's two windows in full, with reset clock times |
 | `ccex run <account> [args]` | launch `claude` as a parked account, leaving the live one alone |
 | `ccex env <account>` | `eval "$(ccex env work)"` to set `CLAUDE_CONFIG_DIR` in your shell |
-| `ccex rename <old> <new>` | rename a parked slot |
 | `ccex rm <account>` | delete a parked slot and its credential |
-| `ccex which \| path \| link --all \| seed` | plumbing |
+| `ccex record` | statusline filter — see below |
+
+Run `ccex <command> -h` for that command's flags. To re-authenticate an account whose
+login has expired, `ccex add` it again under the same name.
 
 ## Knowing when you'll hit a limit
 
@@ -149,7 +149,7 @@ TIME      ACCOUNT                        5H              WEEKLY            CHECK
 
 `monitor install` writes a systemd user timer (`--every 5m`, `--at 80`, `--refresh 15m`,
 all adjustable) that runs `ccex rotate` and logs any switch it makes. `monitor status` shows when it last
-ran and what it did; `monitor stop` pauses it, `monitor uninstall` removes it.
+ran and what it did; `monitor stop` removes it.
 
 `monitor watch` prints a line per check in the foreground, and takes keys while it runs:
 `1`–`6` re-pace it (10s, 30s, 1m, 5m, 15m, 30m), `r` checks immediately, `q` quits. If the timer is running, watch

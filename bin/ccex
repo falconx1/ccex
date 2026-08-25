@@ -16,7 +16,9 @@ for m in common profile limits rotate monitor; do . "$CCEX_LIB/$m.sh"; done
 usage() {   # `ccex -h` for the overview, `ccex <command> -h` for one command
   case "${1:-}" in
     ls|list) cat <<'U'
-ccex ls — every account, one row each
+ccex ls [<account>] [--force]
+
+With no account, every account as one row each:
 
   ACCOUNT   slot name; * marks the live one
   TOKEN     access token: active, or stale until something uses the account
@@ -25,7 +27,9 @@ ccex ls — every account, one row each
   WEEKLY    the same for the week
   CHECKED   how old those numbers are; `live` means a session is reporting now
 
-Reads files only — never starts a session, however stale the numbers are.
+Reads files only — never starts a session, however stale the numbers are, unless you
+ask with --force. Name an account to get its two windows in full instead, with clock
+times: `ccex ls work`.
 U
 ;;
     use) cat <<'U'
@@ -57,14 +61,13 @@ the tie-break. Exits 1 if every account is spent.
 U
 ;;
     monitor) cat <<'U'
-ccex monitor <subcommand> [--every 5m] [--at 80] [--refresh 15m]
+ccex monitor install|watch|status|log|stop [--every 5m] [--at 80] [--refresh 15m]
 
-  install     systemd user timer that runs `ccex rotate` on a schedule
-  watch       follow it in this terminal; 1-6 re-pace, r checks now, q quits
-  status      when it last ran, and what it has rotated
-  log         every switch it has made
-  stop        pause the timer      uninstall   remove it
-  tick        one round, which is what the timer calls
+  install   systemd user timer that runs `ccex rotate` on a schedule
+  watch     follow it in this terminal; 1-6 re-pace, r checks now, q quits
+  status    when it last ran, and what it has rotated
+  log       every switch it has made
+  stop      disable and remove the timer
 
   --every     how often to check (install, watch)
   --at        threshold to rotate at
@@ -72,20 +75,6 @@ ccex monitor <subcommand> [--every 5m] [--at 80] [--refresh 15m]
 
 The timer runs while you are logged in; `loginctl enable-linger $USER` to keep it
 running when you are not.
-U
-;;
-    limits|usage) cat <<'U'
-ccex limits [<account>] [--all] [--quiet] [--force] [--no-launch] [--max-age <seconds>]
-
-The 5-hour and weekly windows in full, with reset clock times.
-
-  --all         every account rather than the live one
-  --quiet       the two-line form `ccex use` prints
-  --force       start a session to check, even if something is reporting
-  --no-launch   never start a session; report what is already known
-  --max-age N   under --no-launch, allow one check for numbers older than N seconds
-
-Parked accounts are never launched for. A window whose reset has passed reads 0%.
 U
 ;;
     record) cat <<'U'
@@ -105,6 +94,9 @@ ccex add <name> [--email you@example.com]
 
 Browser login for another account, parked under ~/.claude-profiles/<name>/ for later.
 Its settings, history and plugins are symlinked to your real ones.
+
+Run it again on a name that already exists to re-authenticate that account, which is
+what an expired REFRESH date calls for.
 U
 ;;
     run) cat <<'U'
@@ -122,45 +114,29 @@ U
     *) cat <<'USAGE'
 ccex — switch which Claude account Claude Code runs as
 
-Everyday:
-  ccex ls                     list accounts; * marks the live one
-  ccex use <account> [-n]     make that account live (-n / --dry-run: plan only)
-  ccex rotate [--at 80] [-n]  if the live account is near its 5h or weekly limit, switch to
-                                the account with the most room left
-  ccex monitor install        rotate automatically in the background (--every 5m, --at 80,
-                                --refresh 15m: how stale numbers may get before a real check)
-  ccex monitor watch          follow it live in this terminal (--every 5m; 1-6 re-pace
-                                it while running, r checks now, q quits)
-  ccex monitor status|stop|log what it has been doing
-  ccex limits [<account>|--all] 5-hour and weekly usage limits, with reset times
-                                (add --force to re-check even if the numbers look fresh)
+  ccex ls [<account>]         every account, or one in full; * marks the live one
+  ccex use <account>          make that account live (-n to plan only)
+  ccex rotate                 switch off the live account if it is out of room (--at 80)
+  ccex monitor install        keep rotating in the background; also watch|status|log|stop
   ccex add <name>             browser login for another account, parked for later
-
-Occasional:
-  ccex status <account>       claude auth status for one account
-  ccex login|logout <account> re-auth or drop one account's credential
-  ccex rename <old> <new>     rename a parked slot
-  ccex rm <account>           delete a parked slot and its credential
-  ccex run <account> [args]   launch claude as a parked account, leaving the live one alone
+  ccex rm <account>           delete a parked account and its login
+  ccex run <account> [args]   run claude as a parked account, leaving the live one alone
   ccex env <account>          eval "$(ccex env work)" to set CLAUDE_CONFIG_DIR
-  ccex which | path <account> | link --all | seed <account>
+  ccex record                 statusline filter that keeps limits current for free
 
-Live limits from your statusline (optional, no extra process):
-  put `ccex record |` at the front of your statusLine command in settings.json, e.g.
-  "command": "ccex record | ~/.claude/statusline-command.sh"
-  Every running session then keeps its own account's numbers current, and `ccex limits`
-  reads them instead of launching anything.
+  ccex <command> -h           what that command does, and its flags
 
 <account> is a slot name, a full email, or any unambiguous prefix of either.
 
-How it works: the live account is the ordinary ~/.claude. `use` moves only the
-claudeAiOauth key — the parked account's in, the live one's out to
-~/.claude-profiles/<email-local-part>/ — and moves the matching identity block with it.
-Settings, history, plugins and MCP tokens are untouched, so a switch changes nothing but
-who is billed. Each account's browser login happens once, ever; its refresh token lives
-in its own slot. Every write backs up to ~/.claude-profiles/.backups/<timestamp>/.
-Sessions you already have open follow the switch: they re-read the credential, so they
-bill the new account from their next request on.
+The live account is the ordinary ~/.claude; the rest are parked under ~/.claude-profiles
+with settings, history and plugins symlinked back, so a switch changes nothing but who is
+billed. `use` moves one key, claudeAiOauth, plus the matching identity block, and backs up
+what it touches to ~/.claude-profiles/.backups/<timestamp>/. Sessions you already have
+open follow the switch: they re-read the credential and bill the new account from their
+next request on.
+
+For live usage numbers at no cost, put `ccex record |` in front of your statusLine command
+in settings.json — see `ccex record -h`.
 USAGE
 ;;
   esac
@@ -168,7 +144,7 @@ USAGE
 
 cmd=${1:-ls}; shift || true
 case "$cmd" in
-  run|login|logout|status)             # these hand their arguments to claude, -h included
+  run)                                 # hands its arguments to claude, -h included
     case "${1:-}" in -h|--help) usage "$cmd"; exit 0 ;; esac ;;
   *)
     for a in "$@"; do
@@ -177,10 +153,12 @@ case "$cmd" in
 esac
 case "$cmd" in
   ls|list)
+    if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then limits --quiet "$@"; exit 0; fi
     cur="${CLAUDE_CONFIG_DIR:-$BASE}"
+    how=--no-launch; case " $* " in *" --force "*) how=--force ;; esac
     declare -A FIVE SEVEN WHEN
     while IFS=$'\t' read -r n f s w; do FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; done \
-      < <(limits --all --tsv --no-launch)
+      < <(limits --all --tsv "$how")
     printf '%-20s %-30s %-7s %-7s %-8s %-22s %-26s %s\n' \
       ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY CHECKED
     while read -r p; do
@@ -202,12 +180,6 @@ case "$cmd" in
     printf 'ccex: logging in to profile %s (%s)\n' "$name" "$d" >&2
     CLAUDE_CONFIG_DIR="$d" claude auth login "$@"
     ;;
-  login|logout|status)
-    [ $# -ge 1 ] || die "usage: ccex $cmd <name>"
-    d=$(dir_for "$1"); shift
-    if [ "$d" = "$BASE" ]; then env -u CLAUDE_CONFIG_DIR claude auth "$cmd" "$@"
-    else CLAUDE_CONFIG_DIR="$d" claude auth "$cmd" "$@"; fi
-    ;;
   run)
     [ $# -ge 1 ] || die "usage: ccex run <name> [claude args...]"
     d=$(dir_for "$1"); shift
@@ -221,19 +193,8 @@ case "$cmd" in
     if [ "$d" = "$BASE" ]; then printf 'unset CLAUDE_CONFIG_DIR\n'
     else printf 'export CLAUDE_CONFIG_DIR=%q\n' "$d"; fi
     ;;
-  link)
-    if [ "${1:-}" = "--all" ]; then while read -r p; do link_shared "$(dir_for "$p")"; done < <(profiles)
-    else [ $# -ge 1 ] || die "usage: ccex link <name>|--all"; link_shared "$(dir_for "$1")"; fi
-    ;;
-  seed)
-    [ $# -ge 1 ] || die "usage: ccex seed <name>"
-    seed "$(dir_for "$1")"
-    ;;
   record)
     record
-    ;;
-  limits|usage)
-    limits "$@"
     ;;
   rotate)
     rotate "$@"
@@ -262,16 +223,6 @@ case "$cmd" in
     [ "$rc" = 3 ] && exit 0        # use_acct already said it was live; that is not a failure
     exit "$rc"
     ;;
-  rename)
-    [ $# -ge 2 ] || die "usage: ccex rename <old> <new>"
-    o=$(dir_for "$1"); n=$(dir_for "$2")
-    [ "$o" = "$BASE" ] || [ "$n" = "$BASE" ] && die "cannot rename the default slot"
-    [ -d "$o" ] || die "no such profile: $1"
-    [ -e "$n" ] && die "already exists: $2"
-    mv "$o" "$n"
-    ;;
-  which) printf '%s\n' "${CLAUDE_CONFIG_DIR:-$BASE (default)}" ;;
-  path)  dir_for "${1:-default}" ;;
   rm)
     [ $# -ge 1 ] || die "usage: ccex rm <name>"
     d=$(dir_for "$1")
