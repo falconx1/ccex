@@ -92,12 +92,32 @@ ccex: limits for ada@acme.example (checked just now)
 It switches only if the live account has crossed `--at` (default 80%) on either window —
 either one running out is enough to make an account useless to you.
 
-Among the accounts still under the threshold, it picks the one with the **most weekly room
-left**, and uses the 5-hour figure only to break ties. The two windows are not equally
-valuable: a spent 5-hour window is back this afternoon, a spent week is gone for days. So
-an account at 70% of its 5 hours but 10% of its week beats one at 0% and 30% — the first
-costs you an afternoon, the second costs you a fifth of the week. `-n` plans without
-switching.
+Among the accounts still under the threshold, it ranks on what their usage will actually
+**cost** you, which is not the same as what it reads:
+
+```
+cost = used% x (time left in the window / length of the window)
+```
+
+Quota you're stuck with for the whole window counts in full. Quota that expires in twenty
+minutes counts for almost nothing — the window refills before you could have spent what
+was left of it. Weekly cost decides; 5-hour cost breaks ties, because a spent 5-hour
+window is back this afternoon while a spent week is gone for days.
+
+That reordering is not cosmetic. Given these four:
+
+```
+CANDIDATE       WEEKLY      RESETS IN   WEEKLY COST
+personal        22% used      0h30m        0.07     <- picked
+client-acme     18% used     17h30m        1.88
+team-shared     28% used     13h30m        2.25
+side-project    36% used    103h30m       22.18
+```
+
+the account reading 22% wins over the one reading 18%, because its week resets in half an
+hour and the other's doesn't for most of a day. Eligibility still uses the raw figures —
+an account has to be usable *now* — but the choice between usable accounts is made on
+cost. `-n` plans without switching.
 
 If every other account is over the threshold too, it stays put, tells you which account
 frees up soonest, and exits 1 — so `ccex rotate` is a usable cron or `/loop` line that

@@ -38,10 +38,29 @@ if not room:
         tail += "; no usage numbers for " + ", ".join(nodata)
     print("NONE\t%s, and every other account is too%s" % (why, tail)); raise SystemExit
 
+FIVE_HOUR, SEVEN_DAY = 5 * 3600, 7 * 86400
+
+def cost(used, resets_at, window):
+    """What that usage will actually cost you: a window about to reset barely costs anything.
+
+    Quota you are stuck with for the whole window counts in full; quota that expires in
+    twenty minutes counts for almost nothing, because the window refills before you could
+    have spent what is left of it.
+    """
+    if not resets_at:
+        return used                       # no reset time known, so assume you are stuck with it
+    left = max(0.0, resets_at - time.time())
+    return used * min(1.0, left / window)
+
 # Weekly is the binding budget: it takes days to come back, where a 5-hour window is back
-# this afternoon. So rank on weekly room first and let the 5-hour figure only break ties.
-room.sort(key=lambda a: (a["seven"], a["five"], a["name"]))
+# this afternoon. Rank on weekly cost first, 5-hour cost only as the tie-break.
+room.sort(key=lambda a: (cost(a["seven"], a["seven_resets"], SEVEN_DAY),
+                         cost(a["five"], a["five_resets"], FIVE_HOUR),
+                         a["name"]))
 best = room[0]
 note = " (numbers %dm old)" % (best["age_s"] // 60) if (best["age_s"] or 0) > 900 else ""
-print("SWITCH\t%s\t%s, so -> %s at %d%% 5h / %d%% weekly%s" %
-      (best["name"], why, best["email"], best["five"], best["seven"], note))
+soon = ""
+if best["seven_resets"] and best["seven_resets"] - time.time() < SEVEN_DAY / 7:
+    soon = ", week resets in %dh%02dm" % divmod(int(best["seven_resets"] - time.time()) // 60, 60)
+print("SWITCH\t%s\t%s, so -> %s at %d%% 5h / %d%% weekly%s%s" %
+      (best["name"], why, best["email"], best["five"], best["seven"], soon, note))
