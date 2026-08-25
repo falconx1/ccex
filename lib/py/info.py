@@ -21,10 +21,7 @@ if exp:
 else:
     state = "NOT LOGGED IN"
 if rexp:
-    if rleft > 0:
-        rstate = "%dd (%s)" % (rleft // 86400, time.strftime("%d-%m", time.localtime(rexp / 1000)))
-    else:
-        rstate = "EXPIRED - re-login"
+    rstate = time.strftime("%d-%m", time.localtime(rexp / 1000)) if rleft > 0 else "expired"
 elif exp:
     rstate = "n/a"
 else:

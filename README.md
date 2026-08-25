@@ -8,10 +8,10 @@ tokens stay exactly where they are.
 
 ```console
 $ ccex ls
-ACCOUNT        EMAIL                    TIER    TOKEN   REFRESH     5H                     WEEKLY                     CHECKED
-*default       ada@example.com          max_5x  6h56m   26d (20-09) ████░░░░░░   41% 3h21m ██░░░░░░░░   23% 14h41m   live
- personal      ada.lovelace@gmail.com   pro     stale   27d (21-09) ░░░░░░░░░░    4% 1h41m ██░░░░░░░░   18% 18h41m   8m ago
- client-acme   ada@acme.example         max_5x  4h02m   28d (22-09) █░░░░░░░░░    9% 2h51m ████░░░░░░   36% 4d 8h41m  4m ago
+ACCOUNT        EMAIL                    TIER    TOKEN   REFRESH  5H                     WEEKLY                     CHECKED
+*default       ada@example.com          max_5x  6h56m   20-09    ████░░░░░░   41% 3h21m ██░░░░░░░░   23% 14h41m   live
+ personal      ada.lovelace@gmail.com   pro     stale   21-09    ░░░░░░░░░░    4% 1h41m ██░░░░░░░░   18% 18h41m   8m ago
+ client-acme   ada@acme.example         max_5x  4h02m   22-09    █░░░░░░░░░    9% 2h51m ████░░░░░░   36% 4d 8h41m  4m ago
 
 $ ccex use client-acme
 ccex: ada@example.com -> parked as 'ada'; ada@acme.example -> live
@@ -227,8 +227,8 @@ weighs that; the bar just shows you the spend.
 **TOKEN** and **REFRESH** are the two OAuth clocks. **TIER** is your plan's rate-limit tier with the boilerplate trimmed — `max_5x` rather
 than `default_claude_max_5x`.
 
-**REFRESH-TOKEN** is the one that matters. It's what buys new access tokens, it lasts on
-the order of a month, and when it's gone that account needs a real browser login again.
+**REFRESH** is the one that matters. It's what buys new access tokens, it lasts on the
+order of a month, and when that date passes the account needs a real browser login again.
 Both values are read straight out of `.credentials.json` (`expiresAt` and
 `refreshTokenExpiresAt`) — nothing is sent anywhere to compute them.
 
