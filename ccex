@@ -284,7 +284,13 @@ try:
         except (OSError, ValueError, IndexError):
             break
     if started is None:
-        started = int(time.time() * 1000)
+        started = 0        # can't prove which account this session holds; assume it predates a switch
+    try:
+        with open(os.path.join(root, ".usage", ".switched")) as f:
+            if started < int(f.read().strip()):
+                raise SystemExit     # older than the last switch: these numbers are the old account's
+    except (OSError, ValueError):
+        pass
     d = os.path.join(root, ".usage")
     os.makedirs(d, exist_ok=True)
     out = os.path.join(d, re.sub(r"[^A-Za-z0-9]+", "_", email.lower()) + ".json")
@@ -695,10 +701,6 @@ case "$cmd" in
     record
     ;;
   limits|usage)
-    while read -r p; do
-      d=$(dir_for "$p")
-      [ "$d" = "$BASE" ] || { link_shared "$d"; seed "$d" >/dev/null 2>&1; }
-    done < <(profiles)
     limits "$@"
     ;;
   use)
