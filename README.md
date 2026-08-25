@@ -8,10 +8,10 @@ tokens stay exactly where they are.
 
 ```console
 $ ccex ls
-ACCOUNT              EMAIL                          TIER                   ACCESS-TOKEN               REFRESH-TOKEN
-*default             ada@example.com                default_claude_max_5x  6h56m left                 26d left (2026-09-20)
- personal            ada.lovelace@gmail.com         default_claude_pro     stale (refreshes on use)   27d left (2026-09-21)
- client-acme         ada@acme.example               default_claude_max_5x  4h02m left                 28d left (2026-09-22)
+ACCOUNT              EMAIL                          TIER     ACCESS-TOKEN             REFRESH-TOKEN
+*default             ada@example.com                max_5x   6h56m                    26d (20-09)
+ personal            ada.lovelace@gmail.com         pro      stale                    27d (21-09)
+ client-acme         ada@acme.example               max_5x   4h02m                    28d (22-09)
 
 $ ccex use client-acme
 ccex: ada@example.com -> parked as 'ada'; ada@acme.example -> live
@@ -60,8 +60,8 @@ reports the account it just switched you to:
 $ ccex use client-acme
 ccex: ada@example.com -> parked as 'ada'; ada@acme.example -> live
 ccex: limits for ada@acme.example (checked just now, from the running session)
-        5h      4% used, resets Aug 25 11:59 (1h49m)
-        weekly  18% used, resets Aug 26 04:59 (18h49m)
+        5h      4% used, resets 25-08 11:59 (1h49m)
+        weekly  18% used, resets 26-08 04:59 (18h49m)
 ```
 
 `ccex limits` asks the same question any time, and `ccex limits --all` asks it of every
@@ -105,8 +105,8 @@ last switch, so a session that predates a switch can never be misread as the new
 ## Reading `ccex ls`
 
 **ACCESS-TOKEN** is the short-lived token Claude Code sends with each request; it lasts
-hours and Claude Code silently renews it, so `stale (refreshes on use)` is normal and
-harmless.
+hours and Claude Code silently renews it, so `stale` is normal and harmless — it just
+means nothing has used that account lately.
 
 **TIER** is your plan's rate-limit tier with the boilerplate trimmed — `max_5x` rather
 than `default_claude_max_5x`.

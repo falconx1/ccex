@@ -470,7 +470,7 @@ def window(d, key):
     left = t - time.time()
     if left <= 0:
         return "%d%% used - window rolled over" % pct
-    return "%d%% used, resets %s (%s)" % (pct, time.strftime("%b %-d %H:%M", time.localtime(t)), hm(left))
+    return "%d%% used, resets %s (%s)" % (pct, time.strftime("%d-%m %H:%M", time.localtime(t)), hm(left))
 
 def age(d):
     c = cached(d)
@@ -527,10 +527,10 @@ if quiet and len(rows) == 1:
     print("        5h      %s" % five)
     print("        weekly  %s" % seven)
 else:
-    print("%-20s %-30s %-34s %s" % ("ACCOUNT", "EMAIL", "5-HOUR", "WEEKLY (ALL MODELS)"))
+    print("%-20s %-30s %-36s %s" % ("ACCOUNT", "EMAIL", "5-HOUR", "WEEKLY (ALL MODELS)"))
     for name, email, five, seven, a in rows:
         mark = "*" if name == "default" else " "
-        print("%s%-19s %-30s %-34s %s" % (mark, name, email, five, seven))
+        print("%s%-19s %-30s %-36s %s" % (mark, name, email, five, seven))
 for n in notes:
     print(n, file=sys.stderr)
 LIMPY
@@ -574,16 +574,16 @@ rleft = rexp / 1000 - time.time() if rexp else None
 if exp:
     left = exp / 1000 - time.time()
     if left > 0:
-        state = "%dh%02dm left" % (left // 3600, left % 3600 // 60)
+        state = "%dh%02dm" % (left // 3600, left % 3600 // 60)
     elif rleft is not None and rleft <= 0:
         state = "stale (refresh expired)"
     else:
-        state = "stale (refreshes on use)"
+        state = "stale"
 else:
     state = "NOT LOGGED IN"
 if rexp:
     if rleft > 0:
-        rstate = "%dd left (%s)" % (rleft // 86400, time.strftime("%Y-%m-%d", time.localtime(rexp / 1000)))
+        rstate = "%dd (%s)" % (rleft // 86400, time.strftime("%d-%m", time.localtime(rexp / 1000)))
     else:
         rstate = "EXPIRED - re-login"
 elif exp:
@@ -598,12 +598,12 @@ cmd=${1:-ls}; shift || true
 case "$cmd" in
   ls|list)
     cur="${CLAUDE_CONFIG_DIR:-$BASE}"
-    printf '%-20s %-30s %-8s %-26s %s\n' ACCOUNT EMAIL TIER ACCESS-TOKEN REFRESH-TOKEN
+    printf '%-20s %-30s %-8s %-24s %s\n' ACCOUNT EMAIL TIER ACCESS-TOKEN REFRESH-TOKEN
     while read -r p; do
       d=$(dir_for "$p")
       mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
       IFS=$'\t' read -r email tier state rstate < <(info "$d")
-      printf '%s%-19s %-30s %-8s %-26s %s\n' "$mark" "$p" "$email" "$tier" "$state" "$rstate"
+      printf '%s%-19s %-30s %-8s %-24s %s\n' "$mark" "$p" "$email" "$tier" "$state" "$rstate"
     done < <(profiles)
     ;;
   add)
