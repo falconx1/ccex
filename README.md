@@ -101,23 +101,27 @@ cost = used% x (time left in the window / length of the window)
 
 Quota you're stuck with for the whole window counts in full. Quota that expires in twenty
 minutes counts for almost nothing — the window refills before you could have spent what
-was left of it. Weekly cost decides; 5-hour cost breaks ties, because a spent 5-hour
-window is back this afternoon while a spent week is gone for days.
+was left of it. **5-hour cost decides; weekly cost only breaks ties**, because the 5-hour
+window is what actually stops you working, while the weekly figure moves too slowly to
+separate two accounts you'd otherwise be choosing between.
 
-That reordering is not cosmetic. Given these four:
+That weighting is not cosmetic. Given these four:
 
 ```
-CANDIDATE       WEEKLY      RESETS IN   WEEKLY COST
-personal        22% used      0h30m        0.07     <- picked
-client-acme     18% used     17h30m        1.88
-team-shared     28% used     13h30m        2.25
-side-project    36% used    103h30m       22.18
+CANDIDATE       5H          RESETS IN   5H COST   WEEKLY COST
+personal         0% used      2h09m       0.00       0.06      <- picked
+client-acme     11% used      0h29m       1.07       1.87
+team-shared      9% used      1h39m       2.97      22.18
+side-project    88% used      2h09m      37.87       2.25
 ```
 
-the account reading 22% wins over the one reading 18%, because its week resets in half an
-hour and the other's doesn't for most of a day. Eligibility still uses the raw figures —
-an account has to be usable *now* — but the choice between usable accounts is made on
-cost. `-n` plans without switching.
+`side-project` has the second-cheapest week of the four and still comes last: 88% of its
+5-hour window is gone and it has two hours to wait, so it's no use to you now.
+`client-acme` reads worse than `team-shared` on raw 5-hour usage (11% against 9%) but
+costs less, because its window resets in half an hour.
+
+Eligibility still uses the raw figures — an account has to be usable *now* — but the
+choice between usable accounts is made on cost. `-n` plans without switching.
 
 If every other account is over the threshold too, it stays put, tells you which account
 frees up soonest, and exits 1 — so `ccex rotate` is a usable cron or `/loop` line that

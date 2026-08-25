@@ -52,15 +52,15 @@ def cost(used, resets_at, window):
     left = max(0.0, resets_at - time.time())
     return used * min(1.0, left / window)
 
-# Weekly is the binding budget: it takes days to come back, where a 5-hour window is back
-# this afternoon. Rank on weekly cost first, 5-hour cost only as the tie-break.
-room.sort(key=lambda a: (cost(a["seven"], a["seven_resets"], SEVEN_DAY),
-                         cost(a["five"], a["five_resets"], FIVE_HOUR),
+# The 5-hour window is what actually stops you working, so it decides. Weekly moves slowly
+# enough that it rarely separates two accounts you would otherwise be choosing between.
+room.sort(key=lambda a: (cost(a["five"], a["five_resets"], FIVE_HOUR),
+                         cost(a["seven"], a["seven_resets"], SEVEN_DAY),
                          a["name"]))
 best = room[0]
 note = " (numbers %dm old)" % (best["age_s"] // 60) if (best["age_s"] or 0) > 900 else ""
 soon = ""
-if best["seven_resets"] and best["seven_resets"] - time.time() < SEVEN_DAY / 7:
-    soon = ", week resets in %dh%02dm" % divmod(int(best["seven_resets"] - time.time()) // 60, 60)
+if best["five_resets"] and best["five_resets"] - time.time() < FIVE_HOUR / 5:
+    soon = ", 5h resets in %dh%02dm" % divmod(int(best["five_resets"] - time.time()) // 60, 60)
 print("SWITCH\t%s\t%s, so -> %s at %d%% 5h / %d%% weekly%s%s" %
       (best["name"], why, best["email"], best["five"], best["seven"], soon, note))
