@@ -3,10 +3,12 @@
 Nothing here spends quota: the numbers come from a running session, from what was
 last measured, or from the clock. Only the live account is ever asked directly.
 """
-import datetime, json, os, pty, select, signal, sys, time
+import json, os, pty, select, signal, sys, time
 
-from ccexlib import (BASE, caps, cfg_for, creds_for, email_for, expand, held, hm, id_for,
-                     is_base, load, logged_in, slots, snap_path)
+from ccexlib import (BASE, caps, cfg_for, creds_for, email_for, expand, held, held_auto,
+                     id_for, is_base, load, slots)
+from usage import (account_json, age, cached, compact, live_sessions, still_counting,
+                   window)
 
 argv = sys.argv[1:]
 quiet = "--quiet" in argv
@@ -23,71 +25,13 @@ for i, a in enumerate(argv):
             sys.exit("ccex: --max-age wants a number of seconds, got '%s'" % a)
         max_age = int(a)
         skip = False
-    elif a == "--max-age":     # numbers older than this are worth a real check even under --no-launch
+    elif a == "--max-age":     # seconds; numbers older than this are worth a real check even
+        # under --no-launch, and 0 turns that off rather than meaning "everything is stale"
         skip = True
     elif not a.startswith("-"):
         args.append(a)
 if skip:
     sys.exit("ccex: --max-age wants a number of seconds")
-
-
-
-
-
-
-def live_sessions(d):
-    """PIDs of Claude Code sessions currently running as this account (Linux only)."""
-    out = []
-    if not os.path.isdir("/proc"):
-        return out
-    for pid in os.listdir("/proc"):
-        if not pid.isdigit():
-            continue
-        try:
-            with open("/proc/%s/cmdline" % pid, "rb") as f:
-                cmd = f.read().split(b"\0")
-            if not cmd or os.path.basename(cmd[0].decode("utf8", "replace")) != "claude":
-                continue
-            with open("/proc/%s/environ" % pid, "rb") as f:
-                env = dict(e.split(b"=", 1) for e in f.read().split(b"\0") if b"=" in e)
-            cd = env.get(b"CLAUDE_CONFIG_DIR", b"").decode("utf8", "replace") or BASE
-            if os.path.realpath(cd) == os.path.realpath(d):
-                out.append(int(pid))
-        except (OSError, ValueError):
-            continue
-    return out
-
-
-def cached(d):
-    """Freshest limits we have, window by window.
-
-    A running session's statusline beats the on-disk cache, but it does not always carry
-    both windows -- Claude Code omits one that has just rolled over. Taking the freshest
-    source wholesale would then lose that window entirely, so each is chosen separately.
-    """
-    cfg = load(cfg_for(d))
-    c = cfg.get("cachedUsageUtilization") or {}
-    if c.get("accountUuid") and c["accountUuid"] != (cfg.get("oauthAccount") or {}).get("accountUuid"):
-        c = {}                     # left behind by whoever held this slot before
-    snap = load(snap_path(email_for(d)))
-    sources = [(snap.get("fetchedAtMs") or 0, snap.get("utilization") or {}, "session"),
-               (c.get("fetchedAtMs") or 0, c.get("utilization") or {}, "cache")]
-    sources.sort(key=lambda x: -x[0])
-
-    util, ages, names = {}, [], set()
-    for key in ("five_hour", "seven_day"):
-        for ms, u, name in sources:
-            v = u.get(key)
-            if isinstance(v, dict) and v.get("utilization") is not None:
-                util[key] = v
-                ages.append(ms)
-                names.add(name)
-                break
-    # The row is only as current as its stalest window, and only "live" if a session is
-    # reporting all of them -- otherwise a frozen window hides behind a fresh one.
-    return {"fetchedAtMs": min(ages) if ages else 0,
-            "utilization": util,
-            "source": "session" if names == {"session"} else "cache"}
 
 
 def trusted_dir(cfg):
@@ -168,62 +112,6 @@ def probe(d, timeout=50):
         pass
     return "ok" if (cached(d).get("fetchedAtMs") or 0) > before else "timeout"
 
-def reset_at(d, key):
-    v = (cached(d)["utilization"] or {}).get(key)
-    if not isinstance(v, dict) or v.get("utilization") is None:
-        return None, None
-    ra = v.get("resets_at")
-    try:
-        return v["utilization"], datetime.datetime.fromisoformat(ra).timestamp() if ra else None
-    except (TypeError, ValueError):
-        return v["utilization"], None
-
-def window(d, key):
-    pct, t = reset_at(d, key)
-    if pct is None:
-        return "-"
-    if t is None:
-        return "%d%% used" % pct
-    left = t - time.time()
-    when = time.strftime("%H:%M" if time.strftime("%d-%m") == time.strftime("%d-%m", time.localtime(t))
-                         else "%d-%m %H:%M", time.localtime(t))
-    if left <= GRACE:
-        return "%s    0%% used - window reset at %s, nothing measured since" % (bar(0), when)
-    return "%s %4d%% used, resets %s (%s)" % (bar(pct), pct, when, hm(left))
-
-WINDOW = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
-GRACE = 60          # a window inside its last minute has effectively already rolled over
-
-
-def bar(pct, width=10):
-    """How much of the window is spent, the same meter Claude Code's own statusline draws."""
-    n = max(0, min(width, int(round(pct / 100.0 * width))))
-    return "\u2588" * n + "\u2591" * (width - n)
-
-
-def compact(d, key):
-    pct, t = reset_at(d, key)
-    if pct is None:
-        return "-"
-    if t is None:
-        return "%d%%" % pct
-    left = t - time.time()
-    if left <= GRACE:
-        return "%s    0%% new" % bar(0)
-    return "%s %4d%% %s" % (bar(pct), pct, hm(left))
-
-def still_counting(d):
-    """True while some window we know about has not provably run out - i.e. old numbers still lie."""
-    return any(pct is not None and (t is None or t - time.time() > GRACE)
-               for pct, t in (reset_at(d, k) for k in ("five_hour", "seven_day")))
-
-def age(d):
-    c = cached(d)
-    f = c.get("fetchedAtMs")
-    if not f:
-        return "never checked"
-    a = time.time() - f / 1000
-    return "just now" if a < 90 else "%s ago" % hm(a)
 
 NOTE = {"untrusted": "no trusted project dir - launch `claude` once in one of your project folders first; showing cached numbers",
         "nologin": "not logged in",
@@ -252,7 +140,7 @@ for name, d in targets:
     have = cached(d)
     age_s = time.time() - have["fetchedAtMs"] / 1000 if have["fetchedAtMs"] else None
     fresh = age_s is not None and age_s < 300
-    too_old = max_age is not None and (age_s is None or age_s > max_age)
+    too_old = bool(max_age) and (age_s is None or age_s > max_age)   # 0 means never
     if have["source"] == "session" and live_sessions(d) and not force:
         st = "ok"                      # a session is open on this account and reporting; touch nothing
     elif fresh and not force:
@@ -275,32 +163,14 @@ for name, d in targets:
                  "live" if have["source"] == "session" and live_sessions(d) else age(d)))
 
 if js:
-    def eff(d, key):
-        pct, t = reset_at(d, key)
-        if pct is None:
-            return None, None, False
-        if t and t - time.time() <= GRACE:
-            return 0, t, True          # window rolled over: zero, and we know it without asking
-        return pct, t, False
-    out = []
-    for name, d in targets:
-        five, ft, fi = eff(d, "five_hour")
-        seven, st_, si = eff(d, "seven_day")
-        c = cached(d)
-        out.append({"name": name, "email": email_for(d), "five": five, "seven": seven,
-                    "five_resets": ft, "seven_resets": st_, "inferred": fi or si,
-                    "age_s": int(time.time() - c["fetchedAtMs"] / 1000) if c["fetchedAtMs"] else None,
-                    "live": c["source"] == "session" and bool(live_sessions(d)),
-                    "held": held(d),
-                    "cap_five": caps(d)[0], "cap_seven": caps(d)[1],
-                    "logged_in": logged_in(d)})
-    print(json.dumps(out))
+    print(json.dumps([account_json(name, d) for name, d in targets]))
 elif tsv:
     for name, d in targets:
         c5, c7 = caps(d)
         # One flags field, never empty: IFS=$'\t' collapses runs of tabs, so an empty
         # column would shift every field after it in the shell that reads this.
-        flags = ",".join(f for f in ("held" if held(d) else "", "cap" if (c5 or c7) else "") if f)
+        flags = ",".join(f for f in ("auto" if held_auto(d) else "", "held" if held(d) else "",
+                                     "cap" if (c5 or c7) else "") if f)
         print("\t".join([name, str(id_for(d) or "-"),
                          compact(d, "five_hour").ljust(22), compact(d, "seven_day").ljust(26),
                          "live" if cached(d)["source"] == "session" and live_sessions(d) else age(d),
@@ -313,7 +183,7 @@ elif quiet and len(rows) == 1:
     print("        weekly  %s" % seven)
     c5, c7 = caps(targets[0][1])
     if c5 or c7:                  # only worth a line when this account sets its own
-        print("        cap     %s (its own; uncapped windows follow --at, default 80)" %
+        print("        cap     %s (its own; uncapped windows follow --at for 5h (default 90), 99%% for the week)" %
               " / ".join("%s %d%%" % (w, v) for w, v in (("5h", c5), ("weekly", c7)) if v))
 else:
     print("%-20s %-30s %-44s %-48s %s" % ("ACCOUNT", "EMAIL", "5-HOUR", "WEEKLY", "CHECKED"))

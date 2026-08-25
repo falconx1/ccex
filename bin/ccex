@@ -17,11 +17,13 @@ usage() {   # `ccex -h` for the overview, `ccex <command> -h` for one command
   case "${1:-}" in
     ls|list) cat <<'U'
 ccex ls [<account>] [--force]
+ccex ls -w|--watch [--every 5s] [--at N] [--refresh 15m] [--rotate]
 
 With no account, every account as one row each:
 
   #         its number: `ccex use 3` is the whole switch
-  ACCOUNT   slot name; * marks the live one, x one held out of the rotation pool
+  ACCOUNT   slot name; * marks the live one, x one you held out of the rotation pool,
+            X one rotation retired because its week is spent (`ccex pool in` revives it)
   TOKEN     access token: active, or stale until something uses the account
   REFRESH   when the login itself expires and needs a browser again
   5H        share of the 5-hour window spent, and how long until it resets
@@ -33,6 +35,25 @@ With no account, every account as one row each:
 Reads files only — never starts a session, however stale the numbers are, unless you
 ask with --force. Name an account to get its two windows in full instead, with clock
 times: `ccex ls work`.
+
+-w keeps the table on screen, htop-style: the reset clocks count down every second,
+the bars move as your sessions report, and the rotation monitor is folded in at the
+bottom — which account is next, and how long until the live one hits the cap that
+sends it there. That estimate comes from how fast the window is actually climbing, so
+it needs a few minutes of readings before it can say.
+
+  --every 10s   how often the numbers behind the countdown are re-read
+  --at N        threshold to predict against; defaults to whatever `--bg` is running at
+  --refresh 15m allow one real check when nothing has reported for that long (off by
+                default, and never while the background daemon is doing it)
+  --rotate      switch here, not just report it, when the live account is out of room
+
+  0-9  type an account's number to switch to it, y to confirm (backspace edits)
+  +/-  re-pace it (10s, 30s, 1m, 5m, 15m, 30m)   r  re-read now    q  quit
+
+The estimate is about the 5-hour window, which is what actually stops you working; the
+week only joins it once it is past 90%. Both read the same per-account caps rotation
+does. Piped to a file it prints plain frames instead of drawing.
 U
 ;;
     use) cat <<'U'
@@ -62,23 +83,27 @@ An account with a cap of its own uses that instead of --at, in both directions -
 
 Keep it running:
 
-  --bg          from now on, in the background, on a systemd user timer
-  --watch       in this terminal; 1-6 re-pace it, r checks now, q quits
-  --status      when it last ran, and what it has rotated
+  --bg          from now on, in the background: a resident service that switches as
+                soon as a session reports the number that crosses the cap
+  --watch       in this terminal, one line per check; 1-6 re-pace, r checks now, q quits
+  --status      whether it is running, what it costs, and what it has rotated
   --log         every switch it has made
-  --stop        remove the timer
+  --stop        remove it
 
-  --every 5m    how often (with --bg or --watch)
-  --refresh 15m how stale numbers may get before one real check is worth it
+  --every 10s   how often it re-reads the numbers (--bg), or prints a line (--watch)
+  --refresh 15m allow one real check when nothing has reported for that long; off by
+                default, because a switch now follows the data instead of a clock
+  --serve       the loop --bg installs, in the foreground
+
+`ccex ls -w` is the same thing with the whole table drawn, if you would rather watch it.
 
 Candidates must be under --at on both windows. Among those, ranking is by what the
 usage costs: used% x (time left in window / window length), 5-hour first, weekly as
 the tie-break. Rotating once exits 1 if every account is spent.
 
 Running in the background never starts a session to poll: it decides from what your
-running sessions already report, and only checks for real once nothing has reported
-for --refresh. The timer runs while you are logged in; `loginctl enable-linger $USER`
-to keep it running when you are not.
+running sessions already report, and reads nothing but files to do it. It runs while
+you are logged in; `loginctl enable-linger $USER` to keep it running when you are not.
 U
 ;;
     record) cat <<'U'
@@ -156,9 +181,10 @@ U
 ccex — switch which Claude account Claude Code runs as
 
   ccex ls [<account>]         every account, or one in full; * marks the live one
+  ccex ls -w                  that table live, counting down, with the next switch on it
   ccex use <account>          make that account live (-n to plan only)
   ccex rotate                 switch off the live account if it is out of room (--at 80)
-  ccex rotate --bg            keep doing that in the background; --watch|--status|--log|--stop
+  ccex rotate --bg            keep doing that in the background, the moment usage says so
   ccex pool out|in <account>  take an account out of the rotation pool, or put it back
   ccex pool cap <account>     how far rotation may spend that one account (--5h, --weekly)
   ccex add <name>             browser login for another account, parked for later
@@ -198,6 +224,21 @@ case "$cmd" in
 esac
 case "$cmd" in
   ls|list)
+    case " $* " in *" -w "*|*" --watch "*)     # the live view; everything below is the one-shot table
+      wargs=()
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -w|--watch) ;;
+          --every|--refresh) [ $# -ge 2 ] || die "$1 needs a duration like 5s"
+                             wargs+=("$1" "$(secs "$2")"); shift ;;
+          --at)       [ $# -ge 2 ] || die "--at needs a percentage"; wargs+=(--at "$2"); shift ;;
+          --rotate|--once) wargs+=("$1") ;;
+          *)          die "ls: '$1' is not a --watch option (try: ccex ls -h)" ;;
+        esac
+        shift
+      done
+      exec python3 "$CCEX_PY/watch.py" ${wargs[@]+"${wargs[@]}"} ;;
+    esac
     how=--no-launch; case " $* " in *" --force "*) how=--force ;; esac
     if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then limits --quiet "$how" "$@"; exit 0; fi
     cur="${CLAUDE_CONFIG_DIR:-$BASE}"
@@ -219,7 +260,8 @@ case "$cmd" in
       d=$(dir_for "$p")
       mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
       case ",${FLAGS[$p]:-}," in                 # held wins: a cap is moot on an account
-        *,held,*) mark="${mark% }x" ;;            # rotation may not choose at all
+        *,auto,*) mark="${mark% }X" ;;            # rotation retired it; `ccex pool in` revives it
+        *,held,*) mark="${mark% }x" ;;            # you took it out; rotation may not choose it
         *,cap,*)  mark="${mark% }c" ;;
       esac
       IFS=$'\t' read -r email tier state rstate < <(info "$d")
@@ -275,6 +317,7 @@ case "$cmd" in
       case "$a" in
         --bg)     mode=install ;;
         --watch)  mode=watch ;;
+        --serve)  mode=serve ;;      # what --bg installs: resident, switches on data change
         --status) mode=status ;;
         --log)    mode=log ;;
         --stop)   mode=stop ;;

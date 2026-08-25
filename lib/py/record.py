@@ -1,7 +1,8 @@
 """Statusline filter: note the limits Claude Code renders, so nothing has to be launched to learn them."""
 import datetime, json, os, sys, time
 
-from ccexlib import BASE, USAGE_DIR, cfg_for, snap_path
+import burn
+from ccexlib import BASE, USAGE_DIR, cfg_for, save, snap_path, stale_report
 
 raw = sys.stdin.read()
 try:
@@ -22,6 +23,10 @@ try:
         ra = v.get("resets_at")
         util[k] = {"utilization": v.get("used_percentage"),
                    "resets_at": datetime.datetime.fromtimestamp(ra, datetime.timezone.utc).isoformat() if ra else None}
+    # This session has not caught up with a switch yet: these are the previous account's
+    # numbers, and this account must not be credited with them.
+    if stale_report(*[(util.get(k) or {}).get("utilization") for k in ("five_hour", "seven_day")]):
+        raise SystemExit
     os.makedirs(USAGE_DIR, exist_ok=True)
     out = snap_path(email)
     try:                          # a payload missing a window must not erase what we had
@@ -29,10 +34,10 @@ try:
             util = {**(json.load(f).get("utilization") or {}), **util}
     except (OSError, ValueError):
         pass
-    tmp = out + ".tmp.%d" % os.getpid()
-    with open(tmp, "w") as f:
-        json.dump({"email": email, "fetchedAtMs": int(time.time() * 1000), "utilization": util,
-                   "sessionId": payload.get("session_id")}, f)
-    os.replace(tmp, out)
+    save(out, {"email": email, "fetchedAtMs": int(time.time() * 1000), "utilization": util,
+               "sessionId": payload.get("session_id")}, unique=True)
+    # A render is the only moment anyone sees a fresh number, so it is where the burn
+    # rate behind `ccex ls -w`'s "switch in ~2h" comes from.
+    burn.note(email, *[(util.get(k) or {}).get("utilization") for k in ("five_hour", "seven_day")])
 except Exception:
     pass

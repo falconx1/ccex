@@ -33,7 +33,7 @@ do_use() {   # the one way an account becomes live; returns 3 if nothing actuall
     case "$a" in --no-check) check=0 ;; *) flags+=("$a") ;; esac
   done
   before=$(live_email)
-  use_acct "$target" || return $?      # no such account, both slots busy, ...
+  with_lock use_acct "$target" || return $?   # no such account, both slots busy, ...
   after=$(live_email)
   [ "$before" = "$after" ] && return 3
   link_shared_all

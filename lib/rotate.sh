@@ -1,6 +1,10 @@
 # Moving off an account that is running out of room, onto the one with the most left.
 
-rotate() {
+# The lock covers the decision as well as the switch, so a second arrival re-reads the
+# numbers the first one has already changed instead of acting on what it saw before them.
+rotate() { with_lock rotate_now "$@"; }
+
+rotate_now() {
   local plan pick pass=() a keep=
   for a in "$@"; do                     # --no-launch and --max-age belong to limits, not to the decision
     if [ -n "$keep" ]; then pass+=("$a"); keep=; continue; fi
@@ -15,8 +19,13 @@ rotate() {
     SWITCH) pick=$a
             printf 'ccex: %s\n' "$b"
             case " $* " in *" -n "*|*" --dry-run "*) printf 'ccex: dry run, nothing written\n'; return 0 ;; esac
-            do_use "$pick" ${pass[@]+"${pass[@]}"} || {
-              printf 'ccex: %s did not become live; nothing changed\n' "$pick" >&2; return 1; }
+            local rc=0
+            do_use "$pick" ${pass[@]+"${pass[@]}"} || rc=$?
+            case "$rc" in
+              0) ;;
+              3) printf 'ccex: %s was already live; nothing moved\n' "$pick" ;;
+              *) printf 'ccex: %s did not become live; nothing changed\n' "$pick" >&2; return 1 ;;
+            esac
             ;;
   esac
 }

@@ -1,106 +1,29 @@
-"""Decide whether to move off the live account, and onto which one. Reads `ccex ls --json`."""
-import json, sys, time
+"""Print rotation's decision as one tab-separated line for `lib/rotate.sh`. Reads `ccex ls --json`."""
+import json, sys
+
+from ccexlib import hold_auto
+from decide import FIVE_AT, WEEKLY_AT, decide
 
 accounts = json.load(sys.stdin)
 argv = sys.argv[1:]
-at = 80
+at = FIVE_AT
 for i, a in enumerate(argv):
     if a == "--at" and i + 1 < len(argv):
         at = int(argv[i + 1])
+dry = "-n" in argv or "--dry-run" in argv
 
-def cap(a, key):
-    """Where this account runs out: its own cap for that window, or --at if it has none."""
-    v = a.get("cap_" + key)
-    return at if v is None else v
+# An account that has spent its week comes off the list, and only `ccex pool in` puts it
+# back. This is the one place it happens: the view predicts, the daemon delegates here.
+retired = []
+for a in accounts:
+    if a.get("held") or a["seven"] is None or a["seven"] < WEEKLY_AT:
+        continue                      # a low weekly cap keeps an account in reserve; only a
+    why = "weekly at %d%%" % a["seven"]   # week that is genuinely spent retires it
+    if dry or hold_auto(a["email"], why):
+        retired.append("%s (%s)" % (a["name"], why))
+        a["held"], a["held_auto"] = True, why
 
-
-def own(a, key):
-    return "its own %d%%" % a["cap_" + key] if a.get("cap_" + key) is not None else "%d%%" % at
-
-
-live = next((a for a in accounts if a["name"] == "default"), None)
-if live is None:
-    print("ERR\tno live account"); raise SystemExit
-if live["five"] is None or live["seven"] is None:
-    print("ERR\tno usage numbers for %s yet - run `ccex ls` first" % live["email"]); raise SystemExit
-
-if live.get("held"):
-    print("STAY\t%s is held out of the pool, so nothing moves it" % live["email"])
-    raise SystemExit
-
-tripped = [(w, own(live, k)) for w, k, v in (("5h", "five", live["five"]),
-                                            ("weekly", "seven", live["seven"]))
-           if v >= cap(live, k)]
-if not tripped:
-    under = "under %s" % own(live, "five")
-    if own(live, "five") != own(live, "seven"):
-        under = "under %s 5h / %s weekly" % (own(live, "five"), own(live, "seven"))
-    print("STAY\t%s is at %d%% 5h / %d%% weekly, %s" %
-          (live["email"], live["five"], live["seven"], under)); raise SystemExit
-
-others = [a for a in accounts if a["name"] != "default"]
-nodata = [a["name"] for a in others if not a["logged_in"] or a["five"] is None or a["seven"] is None]
-held = [a["name"] for a in others if a.get("held")]
-room = [a for a in others if a["name"] not in nodata and not a.get("held")
-        and a["five"] < cap(a, "five") and a["seven"] < cap(a, "seven")]
-
-why = "%s is at %d%% 5h / %d%% weekly (%s over %s)" % (
-    live["email"], live["five"], live["seven"],
-    " and ".join(w for w, _ in tripped), " and ".join(sorted({o for _, o in tripped})))
-
-if not room:
-    soon = []
-    for a in others:
-        if a.get("held") or a["name"] in nodata:
-            continue
-        blocked = [a[k] for k, w in (("five_resets", "five"), ("seven_resets", "seven"))
-                   if a.get(w) is not None and a[w] >= cap(a, w)]
-        if blocked and all(blocked):
-            soon.append((max(blocked), a["name"]))   # free only once the last one resets
-    tail = ""
-    if soon:
-        t, n = min(soon)
-        left = int(t - time.time())
-        tail = "; soonest room is %s in %dh%02dm" % (n, left // 3600, left % 3600 // 60)
-    if nodata:
-        tail += "; no usage numbers for " + ", ".join(nodata)
-    if held:
-        tail += "; held out of the pool: " + ", ".join(held)
-    capped = []
-    for a in others:
-        if a["name"] in nodata or a.get("held"):
-            continue                   # no numbers, or already named as held
-        for w in ("five", "seven"):
-            if a.get("cap_" + w) is not None and a[w] >= a["cap_" + w]:
-                capped.append("%s at its own %d%%" % (a["name"], a["cap_" + w]))
-                break
-    if capped:
-        tail += "; capped by their own limits: " + ", ".join(capped)
-    print("NONE\t%s, and every other account is too%s" % (why, tail)); raise SystemExit
-
-FIVE_HOUR, SEVEN_DAY = 5 * 3600, 7 * 86400
-
-def cost(used, resets_at, window):
-    """What that usage will actually cost you: a window about to reset barely costs anything.
-
-    Quota you are stuck with for the whole window counts in full; quota that expires in
-    twenty minutes counts for almost nothing, because the window refills before you could
-    have spent what is left of it.
-    """
-    if not resets_at:
-        return used                       # no reset time known, so assume you are stuck with it
-    left = max(0.0, resets_at - time.time())
-    return used * min(1.0, left / window)
-
-# The 5-hour window is what actually stops you working, so it decides. Weekly moves slowly
-# enough that it rarely separates two accounts you would otherwise be choosing between.
-room.sort(key=lambda a: (cost(a["five"], a["five_resets"], FIVE_HOUR),
-                         cost(a["seven"], a["seven_resets"], SEVEN_DAY),
-                         a["name"]))
-best = room[0]
-note = " (numbers %dm old)" % (best["age_s"] // 60) if (best["age_s"] or 0) > 900 else ""
-soon = ""
-if best["five_resets"] and best["five_resets"] - time.time() < FIVE_HOUR / 5:
-    soon = ", 5h resets in %dh%02dm" % divmod(int(best["five_resets"] - time.time()) // 60, 60)
-print("SWITCH\t%s\t%s, so -> %s at %d%% 5h / %d%% weekly%s%s" %
-      (best["name"], why, best["email"], best["five"], best["seven"], soon, note))
+verdict, target, message = decide(accounts, at)
+if retired:
+    message += "; out of the pool until `ccex pool in`: " + ", ".join(retired)
+print("\t".join([verdict] + ([target] if target else []) + [message]))

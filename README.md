@@ -50,10 +50,11 @@ Needs `bash`, `python3`, and the `claude` CLI on your PATH.
 | Command | What it does |
 | --- | --- |
 | `ccex ls` | list accounts; `*` marks the live one |
+| `ccex ls -w` | the same table, live: countdowns ticking and the next switch on it |
 | `ccex use <account>` | make that account live (`-n` / `--dry-run` to plan only) |
 | `ccex rotate` | if the live account is running out of room, switch to the one with the most left |
-| `ccex rotate --bg` | keep rotating in the background, every 5 minutes |
-| `ccex rotate --watch` | follow it in this terminal |
+| `ccex rotate --bg` | keep rotating in the background, as soon as usage says so |
+| `ccex rotate --watch` | follow it in this terminal, one line per check |
 | `ccex add <name>` | browser login for another account, parked for later |
 
 `<account>` is the number from the `#` column, a slot name, a full email, or any
@@ -97,11 +98,85 @@ ccex: limits for ada@acme.example (live, from the running session)
 
 Pass `--no-check` to `use` if you'd rather it stayed quiet.
 
+### Watching it, live
+
+```console
+$ ccex ls -w
+```
+
+```
+ ccex  3 accounts  live: ada@example.com  switch at 90% (daemon)  every 10s   14:22:07
+  # ACCOUNT             EMAIL                  5H                        WEEKLY                    CAP    RATE     CHECKED
+  1*cdefault            ada@example.com        ██████░╵░░  62% 2h51m14s  ██░░░░░░╵░  23% 14h11m14s 80/90  +11.4%/h live
+  2  personal           ada.lovelace@gmail.com ░░░░░░░╵░░   4% 1h11m14s  ██░░░░░╵░░  18% 18h11m14s -      -        8m ago
+  3  client-acme        ada@acme.example       █░░░░░░╵░░   9% 2h21m14s  ████░░░╵░░  36% 4d08h11m  -      -        4m ago
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ next switch  in 1h 34m 48s (15:56)  5h is at 62%, climbing 11.4% an hour to its 80% cap
+              -> 2 personal at 4% 5h / 18% weekly
+ rotation     rotating on data change, every 10s at 90%
+ keys         number switch to that account (y to confirm)  +/- pace  r refresh  q quit
+```
+
+`ccex ls` tells you where you stand; `ccex ls -w` leaves it on screen and folds the
+rotation monitor into the bottom of it, so the question you actually have — *when does
+this switch, and to what* — is answered in one place.
+
+The countdowns tick every second, the `╵` in each bar is the percentage that account
+counts as out of room at, and `next switch` is the estimate: how fast the live account's
+5-hour window is climbing, when that meets its cap, and which account rotation would hand
+you. It reads the 5-hour window because that is what actually stops you working; the week
+only joins the estimate once it is past 90%, since "the week runs out in three days" is
+true and useless. Where an account caps itself the estimate uses its own number.
+
+That estimate needs readings to exist: two of them, five minutes apart, from a window
+that hasn't reset in between. Until then it says so rather than guessing. The
+destination needs no readings at all, so it is always there. A window that refills
+before the cap is reached says `weekly resets first` instead of naming a time that would
+never arrive.
+
+Typing an account's number switches to it — the same numbers `ccex use` takes, so `12`
+means account 12 — and `y` confirms before anything moves. Backspace edits, any other key
+cancels.
+
+| Key | |
+| --- | --- |
+| `0`–`9` | type an account number to switch to it, `y` to confirm |
+| `+` / `-` | re-pace the data tick (10s, 30s, 1m, 5m, 15m, 30m) |
+| `r` | re-read everything now, `/proc` included |
+| `q` | quit |
+
+| Flag | |
+| --- | --- |
+| `--every 10s` | how often the numbers behind the countdown are re-read |
+| `--at N` | threshold to predict against; defaults to whatever `--bg` is running at |
+| `--refresh 15m` | allow one real check when nothing has reported for that long |
+| `--rotate` | switch from here, not just report it |
+
+Nothing is launched unless `--refresh` says it may (it is off by default), and never while
+the background daemon is running; when it does happen, the check runs off the render loop,
+so the view keeps counting down instead of freezing for eight seconds.
+
+It is built to be left running for days. A minute of it costs **0.13s of CPU** — about
+0.2% of one core — 17 MB of RSS and 1.3 KB/s of terminal output, and twelve simulated hours
+of ticks leave the live object count unchanged, because the three clocks in it are paced by
+what they actually cost: the second-by-second repaint is arithmetic on
+timestamps it already has and only rewrites the lines that changed, the file re-read is
+skipped entirely for any file whose `mtime` hasn't moved, and the one expensive read — a
+`/proc` walk to find which accounts have sessions open — happens every 15 seconds rather
+than every tick. Percentages themselves change no faster than `ccex record` writes them,
+which is once every 15 seconds per account.
+
+If ccex updates underneath it (a `git pull` while it's up), it re-executes itself into the
+new code rather than running the old one for another week. `--rotate` makes it switch
+accounts itself, and it stands down automatically while [the daemon](#leaving-it-running)
+is running, so the two never both act. `ccex rotate --watch` is still there and unchanged —
+one line per check, no full-screen draw — for when you want a log rather than a screen.
+
 ### Rotating off a full account
 
 ```console
 $ ccex rotate
-ccex: staying put - ada@example.com is at 45% 5h / 23% weekly, under 80%
+ccex: staying put - ada@example.com is at 45% 5h / 23% weekly, under 90% 5h / 99% weekly
 
 $ ccex rotate --at 40
 ccex: ada@example.com is at 45% 5h / 23% weekly (5h over 40%), so -> ada@acme.example at 4% 5h / 18% weekly
@@ -111,8 +186,11 @@ ccex: limits for ada@acme.example (checked just now)
         weekly  18% used, resets 26-08 04:59 (18h27m)
 ```
 
-It switches only if the live account has crossed `--at` (default 80%) on either window —
-either one running out is enough to make an account useless to you.
+It switches only if the live account is out of room on either window. `--at` (default
+90%) is that line for the 5-hour window; **the week's is 99%**, whatever `--at` says.
+Moving off an account at 90% of its week would abandon a tenth of it for six days, while
+90% of a 5-hour window is gone in minutes — so the two windows get different numbers.
+Either one running out is enough to make an account useless to you.
 
 Among the accounts still under the threshold, it ranks on what their usage will actually
 **cost** you, which is not the same as what it reads:
@@ -158,10 +236,44 @@ account being spent from another machine — `--refresh` is what catches that.
 
 ```console
 $ ccex rotate --bg
-ccex: rotating every 5m at 80%, re-checking anything older than 15m; logs in ~/.claude-profiles/.usage/rotate.log
+ccex: rotating at 90% the moment a session reports it, checked every 10s; logs in ~/.claude-profiles/.usage/rotate.log
 
+$ ccex rotate --status
+ccex: rotating on data change (active since Tue 2026-08-25 22:41:03 UTC)
+ccex: rotate --serve --at 90 --every 10s --refresh 0
+ccex: 17 MB resident, 4.2s of cpu used so far
+
+last check:
+  2026-08-25 23:14:52
+  ccex: staying put - ada@example.com is at 62% 5h / 23% weekly, under its own 80% 5h / 90% weekly
+```
+
+`--bg` installs a systemd user service that stays up and re-reads the numbers every
+`--every` (10s). Every statusline render writes a snapshot; the moment one of those crosses
+the threshold, the switch happens — seconds after the number lands, not at the next tick of
+a five-minute clock. `--status` says whether it is running and what it has cost, `--log`
+lists every switch, `--stop` removes it. Installing over an older ccex replaces its
+wake-up timer with the watcher and says so.
+
+It stays cheap by not doing anything expensive: a file whose `mtime` has not moved is not
+re-read, only the handful of keys anyone reads are kept from each config, nothing walks
+`/proc` or computes a burn rate for a screen that isn't there, and the switch itself is
+delegated to `ccex rotate --tick` — the only part that takes the lock and writes anything.
+Measured over a minute of the real service: **16 ms of CPU** (0.03% of one core, ~24 s a
+day) and 7.9 MB resident, `Nice=5` so it yields to your actual work.
+
+It runs while you're logged in. `loginctl enable-linger $USER` if you want it to keep going
+when you aren't.
+
+Nothing it does can start a session: it decides from files your own sessions have already
+written. `--refresh` is what would allow one real check after a stretch of silence, and it
+is **off by default** — with switching driven by the data, there is nothing to poll for.
+Turn it on (`ccex rotate --bg --refresh 15m`) if you want the one case files can't cover:
+an account being spent from another machine, or a long stretch with no session open at all.
+
+```console
 $ ccex rotate --watch
-ccex: watching every 5m, threshold 80%, rotation by the timer
+ccex: watching every 5m, threshold 90%, rotation in the background
 TIME      ACCOUNT                        5H              WEEKLY            CHECKED
 10:37:31  ada@example.com                57% - 3h01m     25% - 14h21m      4m ago
 10:42:31  ada@example.com                82% - 2h56m     25% - 14h16m      live
@@ -169,23 +281,16 @@ TIME      ACCOUNT                        5H              WEEKLY            CHECK
   ^ rotated: ada@example.com -> ada@acme.example
 ```
 
-`--bg` writes a systemd user timer (`--every 5m`, `--at 80`, `--refresh 15m`, all
-adjustable) that runs the same rotation and logs any switch it makes. `--status` shows when
-it last ran and what it did, `--log` lists every switch, `--stop` removes the timer.
+`--watch` is the one-line-per-check view, if you want a log rather than a screen: `1`–`6`
+re-pace it (10s, 30s, 1m, 5m, 15m, 30m), `r` checks immediately, `q` quits. When the daemon
+is running, watch only reports what it does; when it isn't, watch rotates itself. `ccex ls -w`
+[shows the same thing with the whole table](#watching-it-live), which is usually what you
+want.
 
-`--watch` prints a line per check in the foreground, and takes keys while it runs: `1`–`6`
-re-pace it (10s, 30s, 1m, 5m, 15m, 30m), `r` checks immediately, `q` quits. If the timer is
-running, watch only reports what it does; if it isn't, watch does the rotating itself, so
-it works as a foreground alternative to `--bg`.
-
-The timer runs while you're logged in. `loginctl enable-linger $USER` if you want it to
-keep going when you aren't.
-
-The timer runs with `--no-launch`, so it can't turn into a session launcher every five
-minutes — but it isn't blind either. If nothing has reported for `--refresh` (15 minutes
-by default) it does one real check, then goes quiet again. That covers the case your own
-sessions can't: an account being spent from another machine, or a stretch with no session
-open at all.
+Two things can decide to switch at once — the daemon and a `ccex use` you type, or a
+`ccex ls -w --rotate` you left open. They can't collide: the view stands down entirely
+while the daemon is active, and a switch takes an `flock` either way, so the second one to
+arrive re-decides under the lock and finds there is nothing left to do.
 
 ### Keeping an account out of it
 
@@ -194,7 +299,8 @@ $ ccex pool out 4
 ccex: ada.lovelace@gmail.com is out of the rotation pool; its login is untouched
 ```
 
-A held account is marked `x` in `ccex ls` and is never chosen as a rotation destination.
+A held account is marked `x` in `ccex ls` (`X` when rotation retired it itself, below) and
+is never chosen as a rotation destination.
 Its login is kept, so `ccex pool in 4` puts it straight back with no browser round-trip —
 useful for a personal account you don't want work billed to, or one you're saving.
 
@@ -210,10 +316,34 @@ ccex: ada.lovelace@gmail.com is held out of the pool; `ccex pool in 4` first
 When nothing is eligible, the message names the accounts that were held, so an empty pool
 never looks like a bug.
 
+### A spent week takes itself out
+
+An account at 99% of its week is no use again for days. Rotation notices that and takes it
+off the list itself, once:
+
+```console
+$ ccex rotate
+ccex: ada@example.com is at 34% 5h / 99% weekly (weekly over 99%), so -> ada@acme.example at
+9% 5h / 36% weekly; out of the pool until `ccex pool in`: default (weekly at 99%)
+
+$ ccex ls
+#   ACCOUNT      EMAIL              TIER    ...  5H                     WEEKLY
+1 X default      ada@example.com    max_5x  ...  ███░░░░░░░   34% 2h11m █████████░   99% 5d 4h11m
+```
+
+A retired account is marked `X` — the same column as the `x` from `ccex pool out`, because
+it is the same state, reached by itself. Nothing brings it back automatically, not even the
+week rolling over: `ccex pool in 1` is the only way, so an account you were saving cannot be
+drained again the moment its window resets while you weren't looking.
+
+Only the week does this. Running a 5-hour window down is ordinary rotation — it refills
+while you work — so nothing is retired for it. And rotation still moves you *off* a retired
+account you are sitting on; being retired only stops it coming back.
+
 ### Capping one account's share
 
-`--at` is one threshold for every account. A cap is the per-account version: how far *that*
-account may be spent, in either window, whatever `--at` says.
+`--at` (and the week's 99%) is one threshold for every account. A cap is the per-account
+version: how far *that* account may be spent, in either window, whatever the defaults say.
 
 ```console
 $ ccex pool cap 2 --5h 50 --weekly 30
@@ -221,29 +351,29 @@ ccex: ada.lovelace@gmail.com is out of room at 5h 50%, weekly 30%
 
 $ ccex pool cap client-acme --5h 95
 ccex: ada@acme.example is out of room at 5h 95%
-ccex: weekly still follows --at
+ccex: weekly still follows the default (--at for 5h, 99% for the week)
 ```
 
 The account is named the same way as everywhere else — the number from `ccex ls`, a slot
 name, an email, or an unambiguous prefix.
 
-Lower than `--at` to keep something in reserve — half of every 5-hour window and 70% of the
+Lower than the default to keep something in reserve — half of every 5-hour window and 70% of the
 week stay unspent on `personal` above, so it is there when you need it rather than being
 drained by rotation first. Higher than `--at` to run an account right down before moving on,
 which is what you want for the account you'd rather bill.
 
 A cap works in both directions, like `--at` does: rotation moves off that account once it
 crosses its own cap, and won't land on it above its cap either. Windows you don't cap keep
-following `--at`, so one account can protect its week and share everyone else's 5-hour
+following the defaults, so one account can protect its week and share everyone else's 5-hour
 threshold. The messages say which number applied, so a rotation that looks early or late
 explains itself:
 
 ```console
 $ ccex rotate
-ccex: staying put - ada@acme.example is at 90% 5h / 40% weekly, under its own 95% 5h / 80% weekly
+ccex: staying put - ada@acme.example is at 90% 5h / 40% weekly, under its own 95% 5h / 99% weekly
 
 $ ccex rotate
-ccex: ada@example.com is at 90% 5h / 40% weekly (5h over 80%), and every other account is
+ccex: ada@example.com is at 92% 5h / 40% weekly (5h over 90%), and every other account is
 too; capped by their own limits: personal at its own 50%
 ```
 
@@ -267,7 +397,7 @@ $ ccex ls personal
 ccex: limits for ada.lovelace@gmail.com (checked 4m ago)
         5h      ████░░░░░░   41% used, resets 14:10 (3h21m)
         weekly  ██░░░░░░░░   23% used, resets 26-08 13:10 (14h41m)
-        cap     5h 50% / weekly 30% (its own; uncapped windows follow --at, default 80)
+        cap     5h 50% / weekly 30% (its own; uncapped windows follow --at for 5h (default 90), 99% for the week)
 ```
 
 `ccex pool cap <account>` on its own reports what is set; `--clear` puts the account back on
@@ -341,6 +471,17 @@ nothing, and the line that undoes it is printed. The hand-written equivalent is 
 `"command": "ccex record"` on its own works too — it emits nothing, so Claude Code shows no
 statusline, but the recording still happens.
 
+A render that arrives just after a switch is the one case this can get wrong: the session
+still carries the old account's limits, while `.claude.json` already names the new one. So
+the numbers being left behind are written down at switch time and dropped if they turn up
+again, which costs at most one skipped render on the rare occasion two accounts read
+exactly alike.
+
+Each account also gets a small ring of `(time, 5h%, weekly%)` samples next to its
+snapshot — appended only when a number actually moves, capped at 200 — which is where
+`ccex ls -w`'s `+11.4%/h` and its estimate come from. Nothing else reads it, and losing
+it costs nothing but the estimate until the next two readings land.
+
 It writes at most once every 15 seconds per account, into `~/.claude-profiles/.usage/`,
 and costs about 7ms on the renders where it does nothing. Numbers are filed under the
 account the session is billing at the time it renders, which is why they stay right across
@@ -395,7 +536,7 @@ actually help the work you're in the middle of.
 
 - Credentials stay in plain files, exactly as Claude Code already stores them. `ccex` sets
   mode `600` on everything it writes, but it doesn't add encryption that wasn't there.
-- Switches take an `flock` so the background timer and an interactive `ccex use` can't
+- Switches take an `flock` so the background daemon and an interactive `ccex use` can't
   interleave. Claude Code itself doesn't take that lock, so a switch landing in the same
   millisecond as one of its own writes to `~/.claude.json` could still lose that write. The
   window is sub-millisecond and the file is rewritten from a read taken immediately before,
@@ -414,11 +555,14 @@ actually help the work you're in the middle of.
 ./test/run.sh
 ```
 
-66 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
-switching by name and number, exit codes, the pool, per-account caps, rotation decisions,
-the statusline install, help for every command, and that parking never overwrites another
-account's login. No network, no `claude`
-binary, nothing written outside a temp directory.
+109 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
+switching by name and number, exit codes, the pool, per-account caps, the week's own 99%
+and the retirement it triggers, rotation decisions, the statusline install, rendered frames
+of the live view (including the switch prompt and two-digit account numbers) and the
+burn-rate arithmetic behind its estimate, the daemon switching on a data change, staying
+quiet when it shouldn't and restarting itself on an update, two rotations racing each other,
+help for every command, and that parking never overwrites another account's login. No network, no `claude`
+binary, no terminal needed, nothing written outside a temp directory.
 
 ## Layout
 
@@ -428,11 +572,15 @@ lib/common.sh         where the accounts live, plus die / dir_for / profiles / p
 lib/profile.sh        symlinking a profile to your real config, and making an account live
 lib/limits.sh         the limits command, and the statusline recorder's throttle
 lib/rotate.sh         turning a decision into a switch
-lib/background.sh     the systemd timer and the foreground watch
+lib/background.sh     the systemd service, the foreground watch, and one tick
 lib/py/ccexlib.py     paths, JSON read/write, slots, numbers, the pool -- imported by the rest
 lib/py/use.py         the credential handover, the one place accounts move
-lib/py/limits.py      the usage engine: session, cache, clock, and the pty probe
-lib/py/rotate.py      which account to move to, and why
+lib/py/usage.py       reading the two windows: session, cache, clock -- no launching
+lib/py/limits.py      the usage engine on top of that, including the pty probe
+lib/py/decide.py      which account to move to, and why -- shared by rotate and the view
+lib/py/rotate.py      that decision as one line for the shell
+lib/py/burn.py        how fast a window is climbing, and when it hits its cap
+lib/py/watch.py       `ccex ls -w`: the live table with the monitor folded in
 lib/py/record.py      statusline payload in, limits snapshot out
 lib/py/statusline.py  the one-time statusLine edit in settings.json
 lib/py/info.py        one `ccex ls` row

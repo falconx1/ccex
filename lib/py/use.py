@@ -2,7 +2,8 @@
 import os, shutil, sys, time
 
 from ccexlib import (BASE, ROOT, canon, cfg_for, creds_for, email_for, expand, held,
-                     id_for, load, logged_in, save)
+                     id_for, load, logged_in, note_switch, save)
+from usage import cached
 
 target = expand(sys.argv[1])
 dry = "--dry-run" in sys.argv[2:] or "-n" in sys.argv[2:]
@@ -86,6 +87,11 @@ for k in ("oauthAccount", "userID", "cachedUsageUtilization"):
         pkcfg[k] = lcfg[k]
 save(pk_cred, pk)
 save(pk_cfg, pkcfg)
+
+# What the outgoing account was reading, before its numbers are parked with it.
+leaving = (cached(BASE)["utilization"] or {})
+note_switch(live_email, *[(leaving.get(k) or {}).get("utilization")
+                          for k in ("five_hour", "seven_day")])
 
 lc["claudeAiOauth"] = sc["claudeAiOauth"]
 for k in ("oauthAccount", "userID", "cachedUsageUtilization"):

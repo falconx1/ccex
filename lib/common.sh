@@ -13,12 +13,15 @@ die() { printf 'ccex: %s\n' "$*" >&2; exit 1; }
 
 py() { python3 "$CCEX_PY/$1.py" "${@:2}"; }
 
-with_lock() {   # the background timer and an interactive switch must not interleave
-  if ! command -v flock >/dev/null 2>&1; then "$@"; return; fi
+with_lock() {   # the daemon and an interactive switch must not interleave
+  if [ -n "${CCEX_LOCK_HELD:-}" ] || ! command -v flock >/dev/null 2>&1; then "$@"; return; fi
   mkdir -p "$ROOT"
-  exec 9>"$ROOT/.lock"
-  flock -w 20 9 || die "another ccex is switching accounts; try again in a moment"
-  "$@"
+  # A subshell, so the descriptor closes with it: a loop that switches twice must not still
+  # be holding the lock from the first time. flock is per descriptor, so a nested call would
+  # wait on a lock this process already has -- CCEX_LOCK_HELD is what makes it a no-op.
+  ( export CCEX_LOCK_HELD=1
+    flock -w 20 9 || die "another ccex is switching accounts; try again in a moment"
+    "$@" ) 9>"$ROOT/.lock"
 }
 
 dir_for() {

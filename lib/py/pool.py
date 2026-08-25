@@ -66,9 +66,9 @@ if not set_ and not clear:                  # no flags: report, so `cap <account
     if mine:
         print("ccex: %s is capped at %s" % (email, ", ".join(
             "%s %d%%" % (LABEL[k], mine[k]) for k in ("five_hour", "seven_day") if k in mine)))
-        print("ccex: `ccex pool cap %s --clear` puts it back on the --at default" % name)
+        print("ccex: `ccex pool cap %s --clear` puts it back on the defaults" % name)
     else:
-        print("ccex: %s has no cap of its own; rotation uses --at (default 80)" % email)
+        print("ccex: %s has no cap of its own; rotation uses --at for 5h (default 90) and 99%% for the week" % email)
     raise SystemExit
 
 if clear and not set_:
@@ -77,7 +77,7 @@ if clear and not set_:
         raise SystemExit
     caps.pop(email, None)
     save(CAPS, caps)
-    print("ccex: %s is back on the --at default (default 80)" % email)
+    print("ccex: %s is back on the defaults (--at for 5h, 99%% for the week)" % email)
     raise SystemExit
 
 mine = set_ if clear else {**mine, **set_}   # --clear with a flag means "only this from now on"
@@ -87,4 +87,5 @@ print("ccex: %s is out of room at %s" % (email, ", ".join(
     "%s %d%%" % (LABEL[k], mine[k]) for k in ("five_hour", "seven_day") if k in mine)))
 missing = [LABEL[k] for k in ("five_hour", "seven_day") if k not in mine]
 if missing:
-    print("ccex: %s still follows --at" % " and ".join(missing))
+    print("ccex: %s still follows the default (--at for 5h, 99%% for the week)"
+          % " and ".join(missing))
