@@ -21,7 +21,9 @@ if not tripped:
 
 others = [a for a in accounts if a["name"] != "default"]
 nodata = [a["name"] for a in others if not a["logged_in"] or a["five"] is None or a["seven"] is None]
-room = [a for a in others if a["name"] not in nodata and a["five"] < at and a["seven"] < at]
+held = [a["name"] for a in others if a.get("held")]
+room = [a for a in others if a["name"] not in nodata and not a.get("held")
+        and a["five"] < at and a["seven"] < at]
 
 why = "%s is at %d%% 5h / %d%% weekly (%s over %d%%)" % (
     live["email"], live["five"], live["seven"], " and ".join(tripped), at)
@@ -37,6 +39,8 @@ if not room:
         tail = "; soonest room is %s in %dh%02dm" % (n, left // 3600, left % 3600 // 60)
     if nodata:
         tail += "; no usage numbers for " + ", ".join(nodata)
+    if held:
+        tail += "; held out of the pool: " + ", ".join(held)
     print("NONE\t%s, and every other account is too%s" % (why, tail)); raise SystemExit
 
 FIVE_HOUR, SEVEN_DAY = 5 * 3600, 7 * 86400

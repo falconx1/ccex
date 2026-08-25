@@ -5,8 +5,8 @@ last measured, or from the clock. Only the live account is ever asked directly.
 """
 import datetime, json, os, pty, select, signal, sys, time
 
-from ccexlib import (BASE, cfg_for, creds_for, email_for, expand, hm, id_for, is_base,
-                     load, logged_in, slots, snap_path)
+from ccexlib import (BASE, cfg_for, creds_for, email_for, expand, held, hm, id_for,
+                     is_base, load, logged_in, slots, snap_path)
 
 argv = sys.argv[1:]
 quiet = "--quiet" in argv
@@ -288,13 +288,15 @@ if js:
                     "five_resets": ft, "seven_resets": st_, "inferred": fi or si,
                     "age_s": int(time.time() - c["fetchedAtMs"] / 1000) if c["fetchedAtMs"] else None,
                     "live": c["source"] == "session" and bool(live_sessions(d)),
+                    "held": held(d),
                     "logged_in": logged_in(d)})
     print(json.dumps(out))
 elif tsv:
     for name, d in targets:
         print("\t".join([name, str(id_for(d) or "-"),
                          compact(d, "five_hour").ljust(22), compact(d, "seven_day").ljust(26),
-                         "live" if cached(d)["source"] == "session" and live_sessions(d) else age(d)]))
+                         "live" if cached(d)["source"] == "session" and live_sessions(d) else age(d),
+                         "held" if held(d) else ""]))
 elif quiet and len(rows) == 1:
     name, email, five, seven, a = rows[0]
     print("ccex: limits for %s (%s)" % (email, "live, from the running session" if a == "live" else "checked " + a))

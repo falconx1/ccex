@@ -60,6 +60,7 @@ its number for as long as it exists, and a new one takes the lowest free number.
 | `ccex ls <account>` | that account's two windows in full, with reset clock times |
 | `ccex run <account> [args]` | launch `claude` as a parked account, leaving the live one alone |
 | `ccex env <account>` | `eval "$(ccex env work)"` to set `CLAUDE_CONFIG_DIR` in your shell |
+| `ccex pool out \| in <account>` | take an account out of the rotation pool, or put it back |
 | `ccex rm <account>` | delete a parked slot and its credential |
 | `ccex record` | statusline filter — see below |
 
@@ -172,6 +173,22 @@ minutes — but it isn't blind either. If nothing has reported for `--refresh` (
 by default) it does one real check, then goes quiet again. That covers the case your own
 sessions can't: an account being spent from another machine, or a stretch with no session
 open at all.
+
+### Keeping an account out of it
+
+```console
+$ ccex pool out 4
+ccex: ada.lovelace@gmail.com is out of the rotation pool; its login is untouched
+```
+
+A held account is marked `x` in `ccex ls` and is never chosen as a rotation destination.
+Its login is kept, so `ccex pool in 4` puts it straight back with no browser round-trip —
+useful for a personal account you don't want work billed to, or one you're saving.
+
+Being held only stops it being a *destination*. `ccex use 4` still switches to it when you
+ask by name, and if you're on a held account that runs out of room, rotation will still
+move you off it — staying somewhere spent helps nobody. When nothing is eligible, the
+message says which accounts were held, so an empty pool never looks like a bug.
 
 ### Where the numbers come from
 

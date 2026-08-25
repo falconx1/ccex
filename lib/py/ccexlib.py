@@ -66,6 +66,12 @@ def snap_path(email):
 
 
 IDS = os.path.join(ROOT, ".ids.json")
+POOL = os.path.join(ROOT, ".pool.json")
+
+
+def held(d):
+    """True when this account has been taken out of the rotation pool."""
+    return bool(load(POOL).get(email_for(d)))
 
 
 _ids = None

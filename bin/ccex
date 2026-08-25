@@ -21,7 +21,7 @@ ccex ls [<account>] [--force]
 With no account, every account as one row each:
 
   #         its number: `ccex use 3` is the whole switch
-  ACCOUNT   slot name; * marks the live one
+  ACCOUNT   slot name; * marks the live one, x one held out of the rotation pool
   TOKEN     access token: active, or stale until something uses the account
   REFRESH   when the login itself expires and needs a browser again
   5H        share of the 5-hour window spent, and how long until it resets
@@ -46,7 +46,7 @@ is the quickest.
 Sessions you already have open follow the switch.
 U
 ;;
-    rotate) cat <<'U'
+  rotate) cat <<'U'
 ccex rotate [--at 80] [-n] [--bg|--watch|--status|--log|--stop]
 
 Switch off the live account if it has crossed --at on the 5-hour or weekly window,
@@ -88,6 +88,16 @@ Every running session then keeps its own account's numbers current, and nothing 
 to be launched to read them. Writes at most once every 15 seconds per account.
 U
 ;;
+    pool) cat <<'U'
+ccex pool out <account>    stop rotating onto that account
+ccex pool in <account>     let it be chosen again
+
+Its login is kept either way — this is about whether `ccex rotate` may pick it, not about
+signing out. `ccex use` still switches to a held account when you ask for it by name, and
+rotation will still move you off one that runs out of room; being held only means it is
+never a destination. Held accounts are marked x in `ccex ls`.
+U
+;;
     add) cat <<'U'
 ccex add <name> [--email you@example.com]
 
@@ -117,6 +127,7 @@ ccex — switch which Claude account Claude Code runs as
   ccex use <account>          make that account live (-n to plan only)
   ccex rotate                 switch off the live account if it is out of room (--at 80)
   ccex rotate --bg            keep doing that in the background; --watch|--status|--log|--stop
+  ccex pool out|in <account>  take an account out of the rotation pool, or put it back
   ccex add <name>             browser login for another account, parked for later
   ccex rm <account>           delete a parked account and its login
   ccex run <account> [args]   run claude as a parked account, leaving the live one alone
@@ -156,14 +167,17 @@ case "$cmd" in
     if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then limits --quiet "$@"; exit 0; fi
     cur="${CLAUDE_CONFIG_DIR:-$BASE}"
     how=--no-launch; case " $* " in *" --force "*) how=--force ;; esac
-    declare -A ID FIVE SEVEN WHEN
-    while IFS=$'\t' read -r n i f s w; do ID[$n]=$i; FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; done \
-      < <(limits --all --tsv "$how")
+    declare -A ID FIVE SEVEN WHEN HELD
+    while IFS=$'\t' read -r n i f s w h; do
+      ID[$n]=$i; FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; HELD[$n]=$h
+    done < <(limits --all --tsv "$how")
     printf '%-3s %-20s %-30s %-7s %-7s %-8s %-22s %-26s %s\n' \
       '#' ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY CHECKED
     while read -r p; do
       d=$(dir_for "$p")
-      mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
+      mark=' '
+      [ "${HELD[$p]:-}" = held ] && mark='x'
+      [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
       IFS=$'\t' read -r email tier state rstate < <(info "$d")
       printf '%-3s %s%-19s %-30s %-7s %-7s %-8s %s %s %s\n' \
         "${ID[$p]:--}" "$mark" "$p" "$email" "$tier" "$state" "$rstate" \
@@ -195,6 +209,12 @@ case "$cmd" in
     ;;
   record)
     record
+    ;;
+  pool)
+    case "${1:-}" in
+      in|out) [ $# -ge 2 ] || die "usage: ccex pool $1 <account>"; py pool "$1" "$2" ;;
+      *)      die "usage: ccex pool in|out <account>" ;;
+    esac
     ;;
   rotate)
     mode=once; rest=()
