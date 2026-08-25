@@ -1,7 +1,8 @@
 """Hand the live ~/.claude slot over to a parked account, and park the one that was there."""
 import os, shutil, sys, time
 
-from ccexlib import BASE, ROOT, canon, cfg_for, creds_for, email_for, expand, load, logged_in, save
+from ccexlib import (BASE, ROOT, canon, cfg_for, creds_for, email_for, expand, held,
+                     id_for, load, logged_in, save)
 
 target = expand(sys.argv[1])
 dry = "--dry-run" in sys.argv[2:] or "-n" in sys.argv[2:]
@@ -39,6 +40,9 @@ if len(set(hits)) > 1:
 
 src_name = hits[0]
 src_dir, src_email = parked[src_name]
+if held(src_dir):
+    sys.exit("ccex: %s is held out of the pool; `ccex pool in %s` first"
+             % (src_email, id_for(src_dir) or src_name))
 def taken(d):
     """Someone else's login is in here, and overwriting it would need a fresh browser sign-in."""
     if os.path.realpath(d) == os.path.realpath(src_dir):

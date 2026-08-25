@@ -17,6 +17,8 @@ try:
         v = rl.get(k)
         if not isinstance(v, dict):
             continue
+        if v.get("used_percentage") is None:
+            continue                  # reported but empty: keep whatever we already had
         ra = v.get("resets_at")
         util[k] = {"utilization": v.get("used_percentage"),
                    "resets_at": datetime.datetime.fromtimestamp(ra, datetime.timezone.utc).isoformat() if ra else None}

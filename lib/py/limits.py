@@ -74,16 +74,20 @@ def cached(d):
                (c.get("fetchedAtMs") or 0, c.get("utilization") or {}, "cache")]
     sources.sort(key=lambda x: -x[0])
 
-    util, newest, source = {}, 0, "cache"
+    util, ages, names = {}, [], set()
     for key in ("five_hour", "seven_day"):
         for ms, u, name in sources:
             v = u.get(key)
             if isinstance(v, dict) and v.get("utilization") is not None:
                 util[key] = v
-                if ms > newest:
-                    newest, source = ms, name
+                ages.append(ms)
+                names.add(name)
                 break
-    return {"fetchedAtMs": newest, "utilization": util, "source": source}
+    # The row is only as current as its stalest window, and only "live" if a session is
+    # reporting all of them -- otherwise a frozen window hides behind a fresh one.
+    return {"fetchedAtMs": min(ages) if ages else 0,
+            "utilization": util,
+            "source": "session" if names == {"session"} else "cache"}
 
 
 def trusted_dir(cfg):

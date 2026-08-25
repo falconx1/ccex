@@ -36,6 +36,7 @@ live_email() { IFS=$'\t' read -r e _ < <(info "$BASE"); printf '%s' "$e"; }
 
 secs() {   # 30s / 5m / 1h / plain seconds
   case "$1" in
+    [!0-9]*) ;;
     *[!0-9]*[smh]) ;;
     *s) printf '%s' "${1%s}"; return ;;
     *m) printf '%s' "$(( ${1%m} * 60 ))"; return ;;

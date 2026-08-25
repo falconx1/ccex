@@ -50,8 +50,8 @@ unambiguous prefix of either — so `ccex use 3`, `ccex use acme`, `ccex use cli
 `ccex use ada@acme.example` all mean the same account.
 
 Those numbers are stored in `~/.claude-profiles/.ids.json`, keyed by email rather than by
-position, so they don't move when you rotate, add or remove an account. An account keeps
-its number for as long as it exists, and a new one takes the lowest free number.
+position, so they don't move when you rotate or add an account. An account keeps its number
+until you `ccex rm` it, which releases the number for the next account to take.
 
 ## Occasional
 
@@ -185,10 +185,17 @@ A held account is marked `x` in `ccex ls` and is never chosen as a rotation dest
 Its login is kept, so `ccex pool in 4` puts it straight back with no browser round-trip —
 useful for a personal account you don't want work billed to, or one you're saving.
 
-Being held only stops it being a *destination*. `ccex use 4` still switches to it when you
-ask by name, and if you're on a held account that runs out of room, rotation will still
-move you off it — staying somewhere spent helps nobody. When nothing is eligible, the
-message says which accounts were held, so an empty pool never looks like a bug.
+Held means rotation leaves it alone in both directions: it is never chosen, and if you're
+sitting on one, nothing moves you off it however spent it looks. `ccex use 4` refuses too,
+and tells you which command undoes it:
+
+```console
+$ ccex use 4
+ccex: ada.lovelace@gmail.com is held out of the pool; `ccex pool in 4` first
+```
+
+When nothing is eligible, the message names the accounts that were held, so an empty pool
+never looks like a bug.
 
 ### Where the numbers come from
 

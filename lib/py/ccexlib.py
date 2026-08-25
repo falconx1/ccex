@@ -98,7 +98,7 @@ def ids():
             used.add(n)
     if new:
         try:
-            save(IDS, m)                # written once, then reused: a number is not reassigned
+            save(IDS, m)                # written once and reused; `ccex rm` releases one
         except OSError:
             pass
     _ids = m

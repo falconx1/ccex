@@ -1,4 +1,4 @@
-"""Decide whether to move off the live account, and onto which one. Reads `ccex limits --json`."""
+"""Decide whether to move off the live account, and onto which one. Reads `ccex ls --json`."""
 import json, sys, time
 
 accounts = json.load(sys.stdin)
@@ -12,7 +12,11 @@ live = next((a for a in accounts if a["name"] == "default"), None)
 if live is None:
     print("ERR\tno live account"); raise SystemExit
 if live["five"] is None or live["seven"] is None:
-    print("ERR\tno usage numbers for %s yet - run `ccex limits` first" % live["email"]); raise SystemExit
+    print("ERR\tno usage numbers for %s yet - run `ccex ls` first" % live["email"]); raise SystemExit
+
+if live.get("held"):
+    print("STAY\t%s is held out of the pool, so nothing moves it" % live["email"])
+    raise SystemExit
 
 tripped = [w for w, v in (("5h", live["five"]), ("weekly", live["seven"])) if v >= at]
 if not tripped:
@@ -29,9 +33,14 @@ why = "%s is at %d%% 5h / %d%% weekly (%s over %d%%)" % (
     live["email"], live["five"], live["seven"], " and ".join(tripped), at)
 
 if not room:
-    soon = [(a[k], a["name"]) for a in others for k, w in
-            (("five_resets", "five"), ("seven_resets", "seven"))
-            if a.get(k) and a[k] > time.time() and a.get(w) is not None and a[w] >= at]
+    soon = []
+    for a in others:
+        if a.get("held") or a["name"] in nodata:
+            continue
+        blocked = [a[k] for k, w in (("five_resets", "five"), ("seven_resets", "seven"))
+                   if a.get(w) is not None and a[w] >= at]
+        if blocked and all(blocked):
+            soon.append((max(blocked), a["name"]))   # free only once the last one resets
     tail = ""
     if soon:
         t, n = min(soon)

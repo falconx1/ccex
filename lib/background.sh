@@ -68,8 +68,9 @@ monitor() {
             *) printf '%s\n' "$out" ;;              # nowhere to go, or something broke
           esac
         fi
-        name= five= seven= when=
-        IFS=$'\t' read -r name five seven when < <(limits --tsv --no-launch --max-age "$(secs "$refresh")") || true
+        name= id= five= seven= when= heldmark=
+        IFS=$'\t' read -r name id five seven when heldmark \
+          < <(limits --tsv --no-launch --max-age "$(secs "$refresh")") || true
         now=$(live_email)
         if [ -z "$five" ]; then
           printf '%-9s %s\n' "$(date +%T)" "limits unavailable"; wait_key; continue

@@ -92,10 +92,10 @@ U
 ccex pool out <account>    stop rotating onto that account
 ccex pool in <account>     let it be chosen again
 
-Its login is kept either way — this is about whether `ccex rotate` may pick it, not about
-signing out. `ccex use` still switches to a held account when you ask for it by name, and
-rotation will still move you off one that runs out of room; being held only means it is
-never a destination. Held accounts are marked x in `ccex ls`.
+Its login is kept either way — this is about whether `ccex rotate` may touch it, not about
+signing out. Rotation will not choose a held account, and will not move you off one you are
+sitting on, whatever its limits say. `ccex use` still switches to one when you ask for it by
+name. Held accounts are marked x in `ccex ls`.
 U
 ;;
     add) cat <<'U'
@@ -164,22 +164,21 @@ case "$cmd" in
 esac
 case "$cmd" in
   ls|list)
-    if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then limits --quiet "$@"; exit 0; fi
-    cur="${CLAUDE_CONFIG_DIR:-$BASE}"
     how=--no-launch; case " $* " in *" --force "*) how=--force ;; esac
+    if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then limits --quiet "$how" "$@"; exit 0; fi
+    cur="${CLAUDE_CONFIG_DIR:-$BASE}"
     declare -A ID FIVE SEVEN WHEN HELD
     while IFS=$'\t' read -r n i f s w h; do
       ID[$n]=$i; FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; HELD[$n]=$h
     done < <(limits --all --tsv "$how")
-    printf '%-3s %-20s %-30s %-7s %-7s %-8s %-22s %-26s %s\n' \
-      '#' ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY CHECKED
+    printf '%-3s %-2s%-18s %-30s %-7s %-7s %-8s %-22s %-26s %s\n' \
+      '#' '' ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY CHECKED
     while read -r p; do
       d=$(dir_for "$p")
-      mark=' '
-      [ "${HELD[$p]:-}" = held ] && mark='x'
-      [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
+      mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
+      [ "${HELD[$p]:-}" = held ] && mark="${mark% }x"
       IFS=$'\t' read -r email tier state rstate < <(info "$d")
-      printf '%-3s %s%-19s %-30s %-7s %-7s %-8s %s %s %s\n' \
+      printf '%-3s %-2s%-18s %-30s %-7s %-7s %-8s %s %s %s\n' \
         "${ID[$p]:--}" "$mark" "$p" "$email" "$tier" "$state" "$rstate" \
         "${FIVE[$p]:--}" "${SEVEN[$p]:--}" "${WHEN[$p]:--}"
     done < <(profiles) | sort -n        # by id, so the numbers you type read in order
@@ -226,6 +225,9 @@ case "$cmd" in
         --log)    mode=log ;;
         --stop)   mode=stop ;;
         --tick)   mode=tick ;;      # what the timer runs: rotate once, then write the log
+        --at|--every|--refresh|--max-age|-n|--dry-run|--no-launch)
+                  rest+=("$a") ;;
+        -*)       die "rotate: unknown option '$a' (try: ccex rotate -h)" ;;
         *)        rest+=("$a") ;;
       esac
     done
@@ -260,6 +262,7 @@ case "$cmd" in
     [ -d "$d" ] || die "no such profile: $1"
     printf 'Delete %s (credentials + that profile'"'"'s own state; shared dirs are symlinks and survive)? [y/N] ' "$d"
     read -r a; [ "$a" = y ] || die "aborted"
+    py forget "$d" || true      # release its number and pool entry before the slot goes
     rm -rf "$d"
     ;;
   -h|--help|help)
