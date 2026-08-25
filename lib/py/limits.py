@@ -221,7 +221,7 @@ for name, d in targets:
     age_s = time.time() - have["fetchedAtMs"] / 1000 if have["fetchedAtMs"] else None
     fresh = age_s is not None and age_s < 300
     too_old = max_age is not None and (age_s is None or age_s > max_age)
-    if have["source"] == "session" and live_sessions(d):
+    if have["source"] == "session" and live_sessions(d) and not force:
         st = "ok"                      # a session is open on this account and reporting; touch nothing
     elif fresh and not force:
         st = "ok"                      # someone checked moments ago; no reason to ask again

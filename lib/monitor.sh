@@ -31,12 +31,19 @@ monitor() {
     watch)
       local iv last='' now line five seven when name out
       iv=$(secs "$every"); [ "$iv" -ge 5 ] 2>/dev/null || die "monitor watch: --every must be at least 5s"
+      local stamp
+      stamp() { find "$CCEX_LIB" "$CCEX_BIN" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1; }
       trap 'printf "\n"; exit 0' INT
       printf 'ccex: watching every %s, threshold %s%%%s\n' "$every" "$at" \
         "$(systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1 \
              && printf ', rotation by the timer' || printf ', rotating here')"
       printf '%-9s %-30s %-15s %-17s %s\n' TIME ACCOUNT 5H WEEKLY CHECKED
+      stamp=$(stamp)
       while :; do
+        if [ "$(stamp)" != "$stamp" ]; then     # ccex changed on disk; a loop this long-lived should not run stale code
+          printf 'ccex: reloading, ccex was updated\n'
+          exec "$CCEX_BIN" monitor watch --every "$every" --at "$at" --refresh "$refresh"
+        fi
         if ! systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1; then
           out=$(rotate --at "$at" --no-launch --max-age "$(secs "$refresh")" 2>&1) || true
         fi
