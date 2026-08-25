@@ -324,6 +324,7 @@ every = "--all" in argv
 force = "--force" in argv
 tsv = "--tsv" in argv
 js = "--json" in argv
+nolaunch = "--no-launch" in argv
 args = [a for a in argv if not a.startswith("-")]
 
 def load(p):
@@ -566,6 +567,8 @@ for name, d in targets:
         st = "parked"                  # not the account you are running; leave it alone until it is
     elif live_sessions(d) and not force:
         st = "unhooked"                # don't start a second session behind a running one
+    elif nolaunch:
+        st = "ok"                      # caller would rather have old numbers than a new session
     else:
         st = probe(d)                  # last resort: open the TUI just long enough to read /usage
     if st not in ("ok", "parked"):
@@ -611,9 +614,120 @@ for n in notes:
 LIMPY
 }
 
+UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
+live_email() { IFS=$'\t' read -r e _ < <(info "$BASE"); printf '%s' "$e"; }
+
+secs() {   # 30s / 5m / 1h / plain seconds
+  case "$1" in
+    *s) printf '%s' "${1%s}" ;;
+    *m) printf '%s' "$(( ${1%m} * 60 ))" ;;
+    *h) printf '%s' "$(( ${1%h} * 3600 ))" ;;
+    *)  printf '%s' "$1" ;;
+  esac
+}
+
+monitor() {
+  local sub=${1:-status}; shift || true
+  local at=80 every= a
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --at)    at=$2; shift 2 ;;
+      --every) every=$2; shift 2 ;;
+      *)       die "monitor: unknown option '$1'" ;;
+    esac
+  done
+  mkdir -p "$ROOT/.usage"
+  [ -n "$every" ] || every=5m
+  case "$sub" in
+    tick)
+      local before after out rc ts
+      before=$(live_email)
+      out=$(rotate --at "$at" --no-launch 2>&1) && rc=0 || rc=$?
+      after=$(live_email)
+      ts=$(date '+%F %T')
+      printf '%s\n%s\n' "$ts" "$out" > "$ROOT/.usage/.monitor-last"
+      if [ "$before" != "$after" ] || [ "$rc" != 0 ]; then
+        printf '%s  %s\n' "$ts" "$(printf '%s' "$out" | tr '\n' '~' | sed 's/~/ | /g')" \
+          >> "$ROOT/.usage/rotate.log"
+      fi
+      printf '%s\n' "$out"
+      return "$rc"
+      ;;
+    watch)
+      local iv last='' now line five seven when name out
+      iv=$(secs "$every"); [ "$iv" -ge 5 ] 2>/dev/null || die "monitor watch: --every must be at least 5s"
+      trap 'printf "\n"; exit 0' INT
+      printf 'ccex: watching every %s, threshold %s%%%s\n' "$every" "$at" \
+        "$(systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1 \
+             && printf ', rotation by the timer' || printf ', rotating here')"
+      printf '%-9s %-30s %-15s %-17s %s\n' TIME ACCOUNT 5H WEEKLY CHECKED
+      while :; do
+        if ! systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1; then
+          out=$(rotate --at "$at" --no-launch 2>&1) || true
+        fi
+        IFS=$'\t' read -r name five seven when < <(limits --tsv --no-launch)
+        now=$(live_email)
+        printf '%-9s %-30s %-15s %-17s %s\n' "$(date +%T)" "$now" "$five" "$seven" "$when"
+        [ -n "$last" ] && [ "$last" != "$now" ] && printf '  ^ rotated: %s -> %s\n' "$last" "$now"
+        last=$now
+        sleep "$iv"
+      done
+      ;;
+    install)
+      mkdir -p "$UNIT"
+      cat > "$UNIT/ccex-rotate.service" <<UNITEOF
+[Unit]
+Description=ccex: move off a Claude account that is out of room
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/ccex monitor tick --at $at
+UNITEOF
+      cat > "$UNIT/ccex-rotate.timer" <<UNITEOF
+[Unit]
+Description=ccex: check Claude account limits every $every
+
+[Timer]
+OnStartupSec=1m
+OnUnitActiveSec=$every
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNITEOF
+      systemctl --user daemon-reload
+      systemctl --user enable --now ccex-rotate.timer
+      printf 'ccex: rotating every %s at %s%%; logs in %s\n' "$every" "$at" "$ROOT/.usage/rotate.log"
+      [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" = yes ] || \
+        printf 'ccex: the timer runs while you are logged in; `loginctl enable-linger %s` to keep it running otherwise\n' "$USER" >&2
+      ;;
+    stop|uninstall)
+      systemctl --user disable --now ccex-rotate.timer 2>/dev/null || true
+      [ "$sub" = uninstall ] && rm -f "$UNIT/ccex-rotate.timer" "$UNIT/ccex-rotate.service" && systemctl --user daemon-reload
+      printf 'ccex: monitor %s\n' "$([ "$sub" = uninstall ] && echo removed || echo stopped)"
+      ;;
+    status)
+      if systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1; then
+        systemctl --user list-timers ccex-rotate.timer --no-pager | sed -n '1,2p'
+      else
+        printf 'ccex: monitor not installed (ccex monitor install --every 5m --at 80)\n'
+      fi
+      [ -f "$ROOT/.usage/.monitor-last" ] && { printf '\nlast check:\n'; sed 's/^/  /' "$ROOT/.usage/.monitor-last"; }
+      [ -s "$ROOT/.usage/rotate.log" ] && { printf '\nrotations:\n'; tail -5 "$ROOT/.usage/rotate.log" | sed 's/^/  /'; }
+      return 0
+      ;;
+    log) [ -s "$ROOT/.usage/rotate.log" ] && cat "$ROOT/.usage/rotate.log" || printf 'ccex: no rotations logged yet\n' ;;
+    *) die "usage: ccex monitor watch|install|status|stop|uninstall|tick|log" ;;
+  esac
+}
+
 rotate() {   # move off an account that is running out of room, onto the one with the most left
-  local plan pick
-  plan=$(limits --all --json | python3 -c "$(cat <<'ROTPY'
+  local plan pick nolaunch=
+  case " $* " in *" --no-launch "*) nolaunch=--no-launch ;; esac
+  plan=$(limits --all --json $nolaunch | python3 -c "$(cat <<'ROTPY'
 import json, sys, time
 
 accounts = json.load(sys.stdin)
@@ -794,6 +908,9 @@ case "$cmd" in
   rotate)
     rotate "$@"
     ;;
+  monitor)
+    monitor "$@"
+    ;;
   use)
     [ $# -ge 1 ] || die "usage: ccex use <account> [--dry-run] [--no-check]"
     check=1; dry=0; target=''; flags=()
@@ -849,6 +966,9 @@ Everyday:
   ccex use <account> [-n]     make that account live (-n / --dry-run: plan only)
   ccex rotate [--at 80] [-n]  if the live account is near its 5h or weekly limit, switch to
                                 the account with the most room left
+  ccex monitor install        rotate automatically in the background (--every 5m, --at 80)
+  ccex monitor watch          follow it live in this terminal (--every 5m)
+  ccex monitor status|stop|log what it has been doing
   ccex limits [<account>|--all] 5-hour and weekly usage limits, with reset times
                                 (add --force to re-check even if the numbers look fresh)
   ccex add <name>             browser login for another account, parked for later

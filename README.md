@@ -34,6 +34,8 @@ Needs `bash`, `python3`, and the `claude` CLI on your PATH.
 | `ccex ls` | list accounts; `*` marks the live one |
 | `ccex use <account>` | make that account live (`-n` / `--dry-run` to plan only) |
 | `ccex rotate` | if the live account is running out of room, switch to the one with the most left |
+| `ccex monitor install` | keep rotating in the background, every 5 minutes |
+| `ccex monitor watch` | follow it in this terminal |
 | `ccex add <name>` | browser login for another account, parked for later |
 
 `<account>` is a slot name, a full email, or any unambiguous prefix of either — so
@@ -98,6 +100,36 @@ switching runs a real check on the account it just made live, so if the true num
 back over the threshold, the next `ccex rotate` moves again. The exception is an account
 you left recently — its own sessions may still be spending quota while its parked numbers
 sit frozen, which makes rotating back to it optimistic.
+
+### Leaving it running
+
+```console
+$ ccex monitor install
+ccex: rotating every 5m at 80%; logs in ~/.claude-profiles/.usage/rotate.log
+
+$ ccex monitor watch
+ccex: watching every 5m, threshold 80%, rotation by the timer
+TIME      ACCOUNT                        5H              WEEKLY            CHECKED
+10:37:31  ada@example.com                57% - 3h01m     25% - 14h21m      4m ago
+10:42:31  ada@example.com                82% - 2h56m     25% - 14h16m      live
+10:47:31  ada@acme.example               8% - 1h22m      18% - 18h22m      live
+  ^ rotated: ada@example.com -> ada@acme.example
+```
+
+`monitor install` writes a systemd user timer (`--every 5m`, `--at 80`, both adjustable)
+that runs `ccex rotate` and logs any switch it makes. `monitor status` shows when it last
+ran and what it did; `monitor stop` pauses it, `monitor uninstall` removes it.
+
+`monitor watch` prints a line per check in the foreground. If the timer is running, watch
+only reports what the timer does; if it isn't, watch does the rotating itself, so it works
+as a foreground alternative to installing anything. Ctrl-C to stop.
+
+The timer runs while you're logged in. `loginctl enable-linger $USER` if you want it to
+keep going when you aren't.
+
+Neither the timer nor watch will ever start a Claude Code session to poll — they run with
+`--no-launch`, so a background loop can't quietly turn into a session launcher every five
+minutes. They read whatever your running sessions and the clock already know.
 
 ### Where the numbers come from
 
