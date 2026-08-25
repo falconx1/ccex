@@ -219,12 +219,11 @@ def still_counting(d):
 
 def age(d):
     c = cached(d)
-    f, src = c.get("fetchedAtMs"), c.get("source")
+    f = c.get("fetchedAtMs")
     if not f:
         return "never checked"
     a = time.time() - f / 1000
-    when = "just now" if a < 90 else "%s ago" % hm(a)
-    return "%s, from the running session" % when if src == "session" else when
+    return "just now" if a < 90 else "%s ago" % hm(a)
 
 NOTE = {"untrusted": "no trusted project dir - launch `claude` once in one of your project folders first; showing cached numbers",
         "nologin": "not logged in",
@@ -303,7 +302,7 @@ elif tsv:
                          "held" if held(d) else ""]))
 elif quiet and len(rows) == 1:
     name, email, five, seven, a = rows[0]
-    print("ccex: limits for %s (%s)" % (email, "live, from the running session" if a == "live" else "checked " + a))
+    print("ccex: limits for %s (%s)" % (email, a if a == "live" else "checked " + a))
     print("        5h      %s" % five)
     print("        weekly  %s" % seven)
 else:

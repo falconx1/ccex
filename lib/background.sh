@@ -16,15 +16,18 @@ monitor() {
   secs "$every" >/dev/null; secs "$refresh" >/dev/null    # fail here, not on every tick
   case "$sub" in
     tick)
-      local before after out rc ts
+      local before after out rc ts log
+      log="$ROOT/.usage/rotate.log"
       before=$(live_email)
       out=$(rotate --at "$at" --no-launch --max-age "$(secs "$refresh")" 2>&1) && rc=0 || rc=$?
       after=$(live_email)
       ts=$(date '+%F %T')
       printf '%s\n%s\n' "$ts" "$out" > "$ROOT/.usage/.monitor-last"
       if [ "$before" != "$after" ] || [ "$rc" != 0 ]; then
-        printf '%s  %s\n' "$ts" "$(printf '%s' "$out" | tr '\n' '~' | sed 's/~/ | /g')" \
-          >> "$ROOT/.usage/rotate.log"
+        printf '%s  %s\n' "$ts" "$(printf '%s' "$out" | tr '\n' '~' | sed 's/~/ | /g')" >> "$log"
+        if [ "$(wc -l < "$log")" -gt 200 ]; then    # months of switches, not years
+          tail -n 200 "$log" > "$log.new" && mv "$log.new" "$log"
+        fi
       fi
       printf '%s\n' "$out"
       return "$rc"

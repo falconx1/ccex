@@ -13,6 +13,14 @@ die() { printf 'ccex: %s\n' "$*" >&2; exit 1; }
 
 py() { python3 "$CCEX_PY/$1.py" "${@:2}"; }
 
+with_lock() {   # the background timer and an interactive switch must not interleave
+  if ! command -v flock >/dev/null 2>&1; then "$@"; return; fi
+  mkdir -p "$ROOT"
+  exec 9>"$ROOT/.lock"
+  flock -w 20 9 || die "another ccex is switching accounts; try again in a moment"
+  "$@"
+}
+
 dir_for() {
   case "$1" in
     default) printf '%s\n' "$BASE" ;;

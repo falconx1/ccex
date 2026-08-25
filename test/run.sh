@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# Exercises ccex against a throwaway HOME with fake accounts. No network, no claude binary,
+# nothing outside the temp dir. Run it before pushing.
+set -uo pipefail
+
+CCEX=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/bin/ccex
+pass=0 fail=0
+
+setup() {                       # three accounts: a is live, b and c are parked
+  HOME=$(mktemp -d)
+  export HOME CC_PROFILE_ROOT="$HOME/.claude-profiles"
+  python3 - "$HOME" <<'PY'
+import json, os, sys, time
+h = sys.argv[1]
+def w(p, o):
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    json.dump(o, open(p, "w"))
+def account(dir_, cfg, email, five, seven):
+    w(dir_ + "/.credentials.json", {"claudeAiOauth": {
+        "accessToken": "t-" + email, "refreshToken": "r-" + email,
+        "expiresAt": int(time.time() + 3600) * 1000,
+        "refreshTokenExpiresAt": int(time.time() + 30 * 86400) * 1000,
+        "userRateLimitTier": "default_claude_max_5x"}})
+    w(cfg, {"oauthAccount": {"emailAddress": email, "accountUuid": email,
+                             "userRateLimitTier": "default_claude_max_5x"},
+            "cachedUsageUtilization": {
+                "fetchedAtMs": int(time.time() * 1000), "accountUuid": email,
+                "utilization": {
+                    "five_hour": {"utilization": five,
+                                  "resets_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00",
+                                               time.gmtime(time.time() + 3600))},
+                    "seven_day": {"utilization": seven,
+                                  "resets_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00",
+                                               time.gmtime(time.time() + 86400))}}}})
+account(h + "/.claude", h + "/.claude.json", "a@example.com", 90, 40)
+account(h + "/.claude-profiles/bee", h + "/.claude-profiles/bee/.claude.json", "b@example.com", 10, 20)
+account(h + "/.claude-profiles/cee", h + "/.claude-profiles/cee/.claude.json", "c@example.com", 50, 30)
+PY
+}
+
+teardown() { [ -n "${HOME:-}" ] && [ "${HOME#/tmp/}" != "$HOME" ] && rm -rf "$HOME"; }
+
+t() {   # t <name> <expected substring> <command...>
+  local name=$1 want=$2; shift 2
+  local got; got=$("$@" 2>&1)
+  if [[ $got == *"$want"* ]]; then
+    pass=$((pass + 1)); printf '  ok   %s\n' "$name"
+  else
+    fail=$((fail + 1)); printf '  FAIL %s\n       wanted: %s\n       got:    %s\n' \
+      "$name" "$want" "$(printf '%s' "$got" | head -2)"
+  fi
+}
+
+exits() {   # exits <name> <expected code> <command...>
+  local name=$1 want=$2; shift 2
+  "$@" >/dev/null 2>&1; local got=$?
+  if [ "$got" = "$want" ]; then pass=$((pass + 1)); printf '  ok   %s\n' "$name"
+  else fail=$((fail + 1)); printf '  FAIL %s (exit %s, wanted %s)\n' "$name" "$got" "$want"; fi
+}
+
+echo "listing and numbering"
+setup
+t  "ls shows every account"      "c@example.com"        "$CCEX" ls
+t  "live account is marked"      "*"                    "$CCEX" ls
+t  "numbers are assigned"        "1"                    "$CCEX" ls
+t  "ls <account> reads one"      "b@example.com"        "$CCEX" ls bee
+t  "ls never launches"           "90% used"             "$CCEX" ls a@example.com
+
+echo "switching"
+t  "use by name"                 "b@example.com -> live" "$CCEX" use bee --no-check
+t  "use by number"               "-> live"               "$CCEX" use 3 --no-check
+t  "already live is not an error" "already live"         "$CCEX" use 3 --no-check
+exits "already live exits 0"     0                       "$CCEX" use 3 --no-check
+t  "unknown account is refused"  "no parked account"     "$CCEX" use nope
+exits "unknown account exits 1"  1                       "$CCEX" use nope
+t  "unknown flag is refused"     "unknown option"        "$CCEX" use bee --dryrun
+
+echo "numbers survive"
+n_before=$("$CCEX" ls | awk '/b@example.com/ {print $1}')
+"$CCEX" use bee --no-check >/dev/null 2>&1
+n_after=$("$CCEX" ls | awk '/b@example.com/ {print $1}')
+t  "number unchanged by a switch" "$n_before"            echo "$n_after"
+
+echo "the pool"
+mark_of() { "$CCEX" ls | awk -v e="$1" '$0 ~ e {print substr($0, 5, 2)}'; }
+t  "hold an account"             "out of the rotation"   "$CCEX" pool out a@example.com
+t  "held is marked x"            "x"                     mark_of a@example.com
+t  "use on a held account stops" "held out of the pool"  "$CCEX" use a@example.com
+exits "and exits 1"              1                       "$CCEX" use a@example.com
+t  "rotation leaves it alone"    "held out of the pool"  "$CCEX" rotate --at 1 -n
+t  "release it"                  "back in the rotation"  "$CCEX" pool in a@example.com
+t  "mark is cleared"             ""                      mark_of a@example.com
+
+echo "rotation"
+t  "under threshold stays"       "staying put"           "$CCEX" rotate --at 99 -n
+t  "over threshold plans a move" "so ->"                 "$CCEX" rotate --at 45 -n --no-launch
+t  "dry run writes nothing"      "dry run"               "$CCEX" rotate --at 45 -n --no-launch
+t  "mistyped mode is refused"    "unknown option"        "$CCEX" rotate --stopp
+t  "bad duration is refused"     "cannot read"           "$CCEX" rotate --watch --every m
+
+echo "parking never clobbers another account"
+teardown; setup
+python3 - "$HOME" <<'PY'
+import json, os, sys
+h = sys.argv[1]                       # a slot already named after the live account's local part
+d = h + "/.claude-profiles/a"
+os.makedirs(d, exist_ok=True)
+json.dump({"claudeAiOauth": {"accessToken": "KEEP", "refreshToken": "KEEP-R"}},
+          open(d + "/.credentials.json", "w"))
+json.dump({"oauthAccount": {"emailAddress": "keep@example.com", "accountUuid": "k"}},
+          open(d + "/.claude.json", "w"))
+PY
+"$CCEX" use bee --no-check >/dev/null 2>&1
+t  "the other login survives"    "KEEP-R"  cat "$HOME/.claude-profiles/a/.credentials.json"
+
+echo "help"
+for c in ls use rotate pool add run env record; do
+  t "ccex $c -h" "ccex $c" "$CCEX" "$c" -h
+done
+exits "unknown command exits 1"  1                       "$CCEX" bogus
+
+teardown
+printf '\n%d passed, %d failed\n' "$pass" "$fail"
+[ "$fail" -eq 0 ]

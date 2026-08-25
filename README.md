@@ -292,12 +292,29 @@ actually help the work you're in the middle of.
 
 - Credentials stay in plain files, exactly as Claude Code already stores them. `ccex` sets
   mode `600` on everything it writes, but it doesn't add encryption that wasn't there.
+- Switches take an `flock` so the background timer and an interactive `ccex use` can't
+  interleave. Claude Code itself doesn't take that lock, so a switch landing in the same
+  millisecond as one of its own writes to `~/.claude.json` could still lose that write. The
+  window is sub-millisecond and the file is rewritten from a read taken immediately before,
+  but it isn't zero.
+- The last 20 switch backups are kept and the rotation log is capped at 200 lines.
 - Detecting whether a session is already open on an account reads `/proc`, so it's
   Linux-only. Elsewhere `ccex` just falls through to the next source.
 - Only tested on Linux with the credentials-in-`~/.claude/.credentials.json` layout. On
   macOS, where Claude Code can keep the login in the system Keychain instead, `ccex ls`
   will show `NOT LOGGED IN` for accounts it can't see.
 - Respect Anthropic's terms for the accounts you're switching between.
+
+## Tests
+
+```sh
+./test/run.sh
+```
+
+35 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
+switching by name and number, exit codes, the pool, rotation decisions, help for every
+command, and that parking never overwrites another account's login. No network, no `claude`
+binary, nothing written outside a temp directory.
 
 ## Layout
 
@@ -308,13 +325,16 @@ lib/profile.sh    symlinking a profile to your real config, and making an accoun
 lib/limits.sh     the limits command, and the statusline recorder's throttle
 lib/rotate.sh     turning a decision into a switch
 lib/background.sh the systemd timer and the foreground watch
-lib/py/ccexlib.py paths, JSON read/write, slot enumeration -- imported by all of the below
+lib/py/ccexlib.py paths, JSON read/write, slots, numbers, the pool -- imported by the rest
 lib/py/use.py     the credential handover, the one place accounts move
 lib/py/limits.py  the usage engine: session, cache, clock, and the pty probe
 lib/py/rotate.py  which account to move to, and why
 lib/py/record.py  statusline payload in, limits snapshot out
 lib/py/info.py    one `ccex ls` row
 lib/py/seed.py    onboarding and trust for a fresh profile
+lib/py/pool.py    holding an account out of rotation, and putting it back
+lib/py/forget.py  releasing a number when an account is removed
+test/run.sh       the suite above
 ```
 
 Each bash module is sourced by `bin/ccex`; each python module is run by the `py` helper

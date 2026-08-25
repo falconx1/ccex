@@ -61,8 +61,11 @@ if dry:
     print("ccex: dry run, nothing written")
     sys.exit(0)
 
-bak = os.path.join(ROOT, ".backups", time.strftime("%Y%m%d-%H%M%S"))
+bak_root = os.path.join(ROOT, ".backups")
+bak = os.path.join(bak_root, time.strftime("%Y%m%d-%H%M%S"))
 os.makedirs(bak, exist_ok=True)
+for stale in sorted(d for d in os.listdir(bak_root) if not d.startswith("."))[:-20]:
+    shutil.rmtree(os.path.join(bak_root, stale), ignore_errors=True)   # rotating hourly adds up
 src_cred, src_cfg, _ = slot(src_dir)
 for tag, path in (("live.credentials.json", live_cred), ("live.claude.json", live_cfg),
                   ("incoming.credentials.json", src_cred), ("incoming.claude.json", src_cfg)):
