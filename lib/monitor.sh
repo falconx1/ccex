@@ -2,11 +2,12 @@
 
 monitor() {
   local sub=${1:-status}; shift || true
-  local at=80 every= a
+  local at=80 every= refresh=15m a
   while [ $# -gt 0 ]; do
     case "$1" in
       --at)    [ $# -ge 2 ] || die "monitor: --at needs a percentage"; at=$2; shift 2 ;;
       --every) [ $# -ge 2 ] || die "monitor: --every needs a duration like 5m"; every=$2; shift 2 ;;
+      --refresh) [ $# -ge 2 ] || die "monitor: --refresh needs a duration like 15m"; refresh=$2; shift 2 ;;
       *)       die "monitor: unknown option '$1'" ;;
     esac
   done
@@ -16,7 +17,7 @@ monitor() {
     tick)
       local before after out rc ts
       before=$(live_email)
-      out=$(rotate --at "$at" --no-launch 2>&1) && rc=0 || rc=$?
+      out=$(rotate --at "$at" --no-launch --max-age "$(secs "$refresh")" 2>&1) && rc=0 || rc=$?
       after=$(live_email)
       ts=$(date '+%F %T')
       printf '%s\n%s\n' "$ts" "$out" > "$ROOT/.usage/.monitor-last"
@@ -37,10 +38,10 @@ monitor() {
       printf '%-9s %-30s %-15s %-17s %s\n' TIME ACCOUNT 5H WEEKLY CHECKED
       while :; do
         if ! systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1; then
-          out=$(rotate --at "$at" --no-launch 2>&1) || true
+          out=$(rotate --at "$at" --no-launch --max-age "$(secs "$refresh")" 2>&1) || true
         fi
         name= five= seven= when=
-        IFS=$'\t' read -r name five seven when < <(limits --tsv --no-launch) || true
+        IFS=$'\t' read -r name five seven when < <(limits --tsv --no-launch --max-age "$(secs "$refresh")") || true
         now=$(live_email)
         if [ -z "$five" ]; then
           printf '%-9s %s\n' "$(date +%T)" "limits unavailable"; sleep "$iv"; continue
@@ -61,7 +62,7 @@ Description=ccex: move off a Claude account that is out of room
 Type=oneshot
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin${CC_PROFILE_ROOT:+
 Environment=CC_PROFILE_ROOT=$CC_PROFILE_ROOT}
-ExecStart=$CCEX_BIN monitor tick --at $at
+ExecStart=$CCEX_BIN monitor tick --at $at --refresh $refresh
 UNITEOF
       cat > "$UNIT/ccex-rotate.timer" <<UNITEOF
 [Unit]
@@ -78,7 +79,8 @@ WantedBy=timers.target
 UNITEOF
       systemctl --user daemon-reload
       systemctl --user enable --now ccex-rotate.timer
-      printf 'ccex: rotating every %s at %s%%; logs in %s\n' "$every" "$at" "$ROOT/.usage/rotate.log"
+      printf 'ccex: rotating every %s at %s%%, re-checking anything older than %s; logs in %s\n' \
+        "$every" "$at" "$refresh" "$ROOT/.usage/rotate.log"
       [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" = yes ] || \
         printf 'ccex: the timer runs while you are logged in; `loginctl enable-linger %s` to keep it running otherwise\n' "$USER" >&2
       ;;

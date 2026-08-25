@@ -15,7 +15,16 @@ force = "--force" in argv
 tsv = "--tsv" in argv
 js = "--json" in argv
 nolaunch = "--no-launch" in argv
-args = [a for a in argv if not a.startswith("-")]
+
+max_age, args, skip = None, [], False
+for i, a in enumerate(argv):
+    if skip:
+        max_age = int(a)
+        skip = False
+    elif a == "--max-age":     # numbers older than this are worth a real check even under --no-launch
+        skip = True
+    elif not a.startswith("-"):
+        args.append(a)
 
 
 
@@ -214,7 +223,9 @@ else:
 rows, notes = [], []
 for name, d in targets:
     have = cached(d)
-    fresh = have["fetchedAtMs"] and time.time() - have["fetchedAtMs"] / 1000 < 300
+    age_s = time.time() - have["fetchedAtMs"] / 1000 if have["fetchedAtMs"] else None
+    fresh = age_s is not None and age_s < 300
+    too_old = max_age is not None and (age_s is None or age_s > max_age)
     if have["source"] == "session" and live_sessions(d):
         st = "ok"                      # a session is open on this account and reporting; touch nothing
     elif fresh and not force:
@@ -223,7 +234,9 @@ for name, d in targets:
         st = "ok"                      # every window it knew about has since reset, so 0% is certain
     elif not is_base(d):
         st = "parked"                  # not the account you are running; leave it alone until it is
-    elif live_sessions(d) and not force:
+    elif force or too_old:
+        st = probe(d)                  # nothing is reporting and the numbers have aged out
+    elif live_sessions(d):
         st = "unhooked"                # don't start a second session behind a running one
     elif nolaunch:
         st = "ok"                      # caller would rather have old numbers than a new session

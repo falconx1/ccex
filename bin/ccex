@@ -129,7 +129,8 @@ Everyday:
   ccex use <account> [-n]     make that account live (-n / --dry-run: plan only)
   ccex rotate [--at 80] [-n]  if the live account is near its 5h or weekly limit, switch to
                                 the account with the most room left
-  ccex monitor install        rotate automatically in the background (--every 5m, --at 80)
+  ccex monitor install        rotate automatically in the background (--every 5m, --at 80,
+                                --refresh 15m: how stale numbers may get before a real check)
   ccex monitor watch          follow it live in this terminal (--every 5m)
   ccex monitor status|stop|log what it has been doing
   ccex limits [<account>|--all] 5-hour and weekly usage limits, with reset times

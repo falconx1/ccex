@@ -120,8 +120,8 @@ TIME      ACCOUNT                        5H              WEEKLY            CHECK
   ^ rotated: ada@example.com -> ada@acme.example
 ```
 
-`monitor install` writes a systemd user timer (`--every 5m`, `--at 80`, both adjustable)
-that runs `ccex rotate` and logs any switch it makes. `monitor status` shows when it last
+`monitor install` writes a systemd user timer (`--every 5m`, `--at 80`, `--refresh 15m`,
+all adjustable) that runs `ccex rotate` and logs any switch it makes. `monitor status` shows when it last
 ran and what it did; `monitor stop` pauses it, `monitor uninstall` removes it.
 
 `monitor watch` prints a line per check in the foreground. If the timer is running, watch
@@ -131,9 +131,12 @@ as a foreground alternative to installing anything. Ctrl-C to stop.
 The timer runs while you're logged in. `loginctl enable-linger $USER` if you want it to
 keep going when you aren't.
 
-Neither the timer nor watch will ever start a Claude Code session to poll — they run with
-`--no-launch`, so a background loop can't quietly turn into a session launcher every five
-minutes. They read whatever your running sessions and the clock already know.
+The timer runs with `--no-launch`, so it can't turn into a session launcher every five
+minutes — but it isn't blind either. If nothing has reported for `--refresh` (15 minutes
+by default) it does one real check, then goes quiet again. That matters for accounts
+shared with other people or other machines, whose usage moves without any session of yours
+running: without it, the monitor would happily decide from numbers frozen at whatever they
+were when you last switched.
 
 ### Where the numbers come from
 
@@ -151,7 +154,9 @@ session on an account you aren't using. It takes the first answer it can get:
 4. **Only for the account you're actually running**, only when it has a window still
    counting down, and only if none of the above answered: `ccex` starts Claude Code in a
    pty, opens `/usage`, reads the answer and quits. About eight seconds, no prompt sent,
-   no cost — but it is a real session start, so it's the last resort. `--force` demands it.
+   no cost — but it is a real session start, so it's the last resort. `--force` demands it;
+   `--max-age <seconds>` allows it only once the numbers have aged past a limit you set,
+   which is how the background monitor stays honest without polling.
 
 In practice step 4 is reachable in one situation: you have no session open on the live
 account and its windows haven't run out yet — which is what `ccex use` walks into before
