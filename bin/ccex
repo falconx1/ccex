@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# ccex — "cc exchange": switch which Claude account Claude Code runs as.
+# The live account is the ordinary ~/.claude; the others are parked under
+# ~/.claude-profiles, sharing settings and history through symlinks.
+set -euo pipefail
+
+SELF=$(readlink -f "${BASH_SOURCE[0]}")
+CCEX_LIB=${CCEX_LIB:-$(dirname "$SELF")/../lib}
+CCEX_PY="$CCEX_LIB/py"
+[ -d "$CCEX_PY" ] || { printf 'ccex: cannot find its lib/ next to %s\n' "$SELF" >&2; exit 1; }
+
+# shellcheck source=../lib/common.sh
+for m in common profile limits rotate monitor; do . "$CCEX_LIB/$m.sh"; done
+
+cmd=${1:-ls}; shift || true
+case "$cmd" in
+  ls|list)
+    cur="${CLAUDE_CONFIG_DIR:-$BASE}"
+    declare -A FIVE SEVEN WHEN
+    while IFS=$'\t' read -r n f s w; do FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; done \
+      < <(limits --all --tsv 2>/dev/null)
+    printf '%-20s %-30s %-7s %-8s %-12s %-13s %-16s %s\n' \
+      ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY CHECKED
+    while read -r p; do
+      d=$(dir_for "$p")
+      mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
+      IFS=$'\t' read -r email tier state rstate < <(info "$d")
+      printf '%s%-19s %-30s %-7s %-8s %-12s %-13s %-16s %s\n' \
+        "$mark" "$p" "$email" "$tier" "$state" "$rstate" \
+        "${FIVE[$p]:--}" "${SEVEN[$p]:--}" "${WHEN[$p]:--}"
+    done < <(profiles)
+    ;;
+  add)
+    [ $# -ge 1 ] || die "usage: ccex add <name> [--email you@example.com]"
+    name=$1; shift
+    d=$(dir_for "$name")
+    [ "$d" = "$BASE" ] && die "'default' is the existing ~/.claude account"
+    link_shared "$d"
+    seed "$d"
+    printf 'ccex: logging in to profile %s (%s)\n' "$name" "$d" >&2
+    CLAUDE_CONFIG_DIR="$d" claude auth login "$@"
+    ;;
+  login|logout|status)
+    [ $# -ge 1 ] || die "usage: ccex $cmd <name>"
+    d=$(dir_for "$1"); shift
+    if [ "$d" = "$BASE" ]; then env -u CLAUDE_CONFIG_DIR claude auth "$cmd" "$@"
+    else CLAUDE_CONFIG_DIR="$d" claude auth "$cmd" "$@"; fi
+    ;;
+  run)
+    [ $# -ge 1 ] || die "usage: ccex run <name> [claude args...]"
+    d=$(dir_for "$1"); shift
+    [ -d "$d" ] || die "no such profile dir: $d (run: ccex add)"
+    if [ "$d" = "$BASE" ]; then exec env -u CLAUDE_CONFIG_DIR claude "$@"
+    else link_shared "$d"; exec env CLAUDE_CONFIG_DIR="$d" claude "$@"; fi
+    ;;
+  env)
+    [ $# -ge 1 ] || die "usage: eval \"\$(ccex env <name>)\""
+    d=$(dir_for "$1")
+    if [ "$d" = "$BASE" ]; then printf 'unset CLAUDE_CONFIG_DIR\n'
+    else printf 'export CLAUDE_CONFIG_DIR=%q\n' "$d"; fi
+    ;;
+  link)
+    if [ "${1:-}" = "--all" ]; then while read -r p; do link_shared "$(dir_for "$p")"; done < <(profiles)
+    else [ $# -ge 1 ] || die "usage: ccex link <name>|--all"; link_shared "$(dir_for "$1")"; fi
+    ;;
+  seed)
+    [ $# -ge 1 ] || die "usage: ccex seed <name>"
+    seed "$(dir_for "$1")"
+    ;;
+  record)
+    record
+    ;;
+  limits|usage)
+    limits "$@"
+    ;;
+  rotate)
+    rotate "$@"
+    ;;
+  monitor)
+    monitor "$@"
+    ;;
+  use)
+    [ $# -ge 1 ] || die "usage: ccex use <account> [--dry-run] [--no-check]"
+    check=1; dry=0; target=''; flags=()
+    for a in "$@"; do
+      case "$a" in
+        --no-check)     check=0 ;;
+        -n|--dry-run)   dry=1; flags+=("$a") ;;
+        -*)             flags+=("$a") ;;
+        *)              [ -n "$target" ] && die "use takes one account, got '$target' and '$a'"; target=$a ;;
+      esac
+    done
+    [ -n "$target" ] || die "usage: ccex use <account> [--dry-run] [--no-check]"
+    if [ "$dry" = 1 ]; then
+      use_acct "$target" "${flags[@]+"${flags[@]}"}"
+      exit 0
+    fi
+    do_use "$target" "$([ "$check" = 1 ] && echo check || echo quiet)"
+    ;;
+  rename)
+    [ $# -ge 2 ] || die "usage: ccex rename <old> <new>"
+    o=$(dir_for "$1"); n=$(dir_for "$2")
+    [ "$o" = "$BASE" ] || [ "$n" = "$BASE" ] && die "cannot rename the default slot"
+    [ -d "$o" ] || die "no such profile: $1"
+    [ -e "$n" ] && die "already exists: $2"
+    mv "$o" "$n"
+    ;;
+  which) printf '%s\n' "${CLAUDE_CONFIG_DIR:-$BASE (default)}" ;;
+  path)  dir_for "${1:-default}" ;;
+  rm)
+    [ $# -ge 1 ] || die "usage: ccex rm <name>"
+    d=$(dir_for "$1")
+    [ "$d" = "$BASE" ] && die "refusing to delete ~/.claude"
+    [ -d "$d" ] || die "no such profile: $1"
+    printf 'Delete %s (credentials + that profile'"'"'s own state; shared dirs are symlinks and survive)? [y/N] ' "$d"
+    read -r a; [ "$a" = y ] || die "aborted"
+    rm -rf "$d"
+    ;;
+  -h|--help|help)
+    cat <<'USAGE'
+ccex — switch which Claude account Claude Code runs as
+
+Everyday:
+  ccex ls                     list accounts; * marks the live one
+  ccex use <account> [-n]     make that account live (-n / --dry-run: plan only)
+  ccex rotate [--at 80] [-n]  if the live account is near its 5h or weekly limit, switch to
+                                the account with the most room left
+  ccex monitor install        rotate automatically in the background (--every 5m, --at 80)
+  ccex monitor watch          follow it live in this terminal (--every 5m)
+  ccex monitor status|stop|log what it has been doing
+  ccex limits [<account>|--all] 5-hour and weekly usage limits, with reset times
+                                (add --force to re-check even if the numbers look fresh)
+  ccex add <name>             browser login for another account, parked for later
+
+Occasional:
+  ccex status <account>       claude auth status for one account
+  ccex login|logout <account> re-auth or drop one account's credential
+  ccex rename <old> <new>     rename a parked slot
+  ccex rm <account>           delete a parked slot and its credential
+  ccex run <account> [args]   launch claude as a parked account, leaving the live one alone
+  ccex env <account>          eval "$(ccex env work)" to set CLAUDE_CONFIG_DIR
+  ccex which | path <account> | link --all | seed <account>
+
+Live limits from your statusline (optional, no extra process):
+  put `ccex record |` at the front of your statusLine command in settings.json, e.g.
+  "command": "ccex record | ~/.claude/statusline-command.sh"
+  Every running session then keeps its own account's numbers current, and `ccex limits`
+  reads them instead of launching anything.
+
+<account> is a slot name, a full email, or any unambiguous prefix of either.
+
+How it works: the live account is the ordinary ~/.claude. `use` moves only the
+claudeAiOauth key — the parked account's in, the live one's out to
+~/.claude-profiles/<email-local-part>/ — and moves the matching identity block with it.
+Settings, history, plugins and MCP tokens are untouched, so a switch changes nothing but
+who is billed. Each account's browser login happens once, ever; its refresh token lives
+in its own slot. Every write backs up to ~/.claude-profiles/.backups/<timestamp>/.
+Open sessions keep the account they started on.
+USAGE
+    ;;
+  *) die "unknown command '$cmd' (try: ccex --help)" ;;
+esac

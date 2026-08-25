@@ -21,9 +21,13 @@ ccex: live account is now ada@acme.example (rollback: ~/.claude-profiles/.backup
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/falconx1/ccex/main/ccex -o ~/.local/bin/ccex
-chmod +x ~/.local/bin/ccex
+git clone https://github.com/falconx1/ccex.git ~/src/ccex
+~/src/ccex/install.sh
 ```
+
+That symlinks `~/.local/bin/ccex` to the checkout, so `git pull` is the whole update
+story. Pass a different directory to install elsewhere: `install.sh ~/bin`. Keep the
+checkout where it is — the symlink and the systemd unit both point at it.
 
 Needs `bash`, `python3`, and the `claude` CLI on your PATH.
 
@@ -223,6 +227,28 @@ session you launch, not the one you're sitting in.
   macOS, where Claude Code can keep the login in the system Keychain instead, `ccex ls`
   will show `NOT LOGGED IN` for accounts it can't see.
 - Respect Anthropic's terms for the accounts you're switching between.
+
+## Layout
+
+```
+bin/ccex          argument dispatch and the help text, nothing else
+lib/common.sh     where the accounts live, plus die / dir_for / profiles / py
+lib/profile.sh    symlinking a profile to your real config, and making an account live
+lib/limits.sh     the limits command, and the statusline recorder's throttle
+lib/rotate.sh     turning a decision into a switch
+lib/monitor.sh    the systemd timer and the foreground watch
+lib/py/ccexlib.py paths, JSON read/write, slot enumeration -- imported by all of the below
+lib/py/use.py     the credential handover, the one place accounts move
+lib/py/limits.py  the usage engine: session, cache, clock, and the pty probe
+lib/py/rotate.py  which account to move to, and why
+lib/py/record.py  statusline payload in, limits snapshot out
+lib/py/info.py    one `ccex ls` row
+lib/py/seed.py    onboarding and trust for a fresh profile
+```
+
+Each bash module is sourced by `bin/ccex`; each python module is run by the `py` helper
+with `CCEX_BASE` and `CCEX_ROOT` in the environment, so nothing has to be passed down
+through argument lists.
 
 ## License
 
