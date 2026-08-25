@@ -33,6 +33,7 @@ Needs `bash`, `python3`, and the `claude` CLI on your PATH.
 | --- | --- |
 | `ccex ls` | list accounts; `*` marks the live one |
 | `ccex use <account>` | make that account live (`-n` / `--dry-run` to plan only) |
+| `ccex rotate` | if the live account is running out of room, switch to the one with the most left |
 | `ccex add <name>` | browser login for another account, parked for later |
 
 `<account>` is a slot name, a full email, or any unambiguous prefix of either — so
@@ -67,6 +68,36 @@ ccex: limits for ada@acme.example (live, from the running session)
 ```
 
 Pass `--no-check` to `use` if you'd rather it stayed quiet.
+
+### Rotating off a full account
+
+```console
+$ ccex rotate
+ccex: staying put - ada@example.com is at 45% 5h / 23% weekly, under 80%
+
+$ ccex rotate --at 40
+ccex: ada@example.com is at 45% 5h / 23% weekly (5h over 40%), so -> ada@acme.example at 4% 5h / 18% weekly
+ccex: ada@example.com -> parked as 'ada'; ada@acme.example -> live
+ccex: limits for ada@acme.example (checked just now)
+        5h      8% used, resets 11:59 (1h27m)
+        weekly  18% used, resets 26-08 04:59 (18h27m)
+```
+
+It switches only if the live account has crossed `--at` (default 80%) on either window.
+Among the accounts that are still under it, it picks the one whose *worst* window has the
+most room — `min(100-5h, 100-weekly)` — so an account with a fresh 5-hour window but a
+nearly spent week won't be chosen just for looking good on one axis. Ties go to the lower
+weekly figure, since that's the slower thing to get back. `-n` plans without switching.
+
+If every other account is over the threshold too, it stays put, tells you which account
+frees up soonest, and exits 1 — so `ccex rotate` is a usable cron or `/loop` line that
+only makes noise when there's genuinely nowhere to go.
+
+Parked numbers can be out of date, and rotation leans on them. That mostly self-corrects:
+switching runs a real check on the account it just made live, so if the true numbers come
+back over the threshold, the next `ccex rotate` moves again. The exception is an account
+you left recently — its own sessions may still be spending quota while its parked numbers
+sit frozen, which makes rotating back to it optimistic.
 
 ### Where the numbers come from
 

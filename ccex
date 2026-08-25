@@ -235,6 +235,13 @@ print("ccex: live account is now %s (rollback: %s)" % (src_email, bak), file=sys
 USEPY
 }
 
+do_use() {   # the one way an account becomes live
+  use_acct "$1"
+  link_shared_all
+  mark_switch
+  if [ "${2:-check}" = check ]; then limits --quiet; fi
+}
+
 mark_switch() {   # sessions started before this moment still hold the old account's token
   mkdir -p "$ROOT/.usage"
   date +%s000 > "$ROOT/.usage/.switched"
@@ -316,6 +323,7 @@ quiet = "--quiet" in argv
 every = "--all" in argv
 force = "--force" in argv
 tsv = "--tsv" in argv
+js = "--json" in argv
 args = [a for a in argv if not a.startswith("-")]
 
 def load(p):
@@ -565,7 +573,26 @@ for name, d in targets:
     rows.append((name, email_for(d), window(d, "five_hour"), window(d, "seven_day"),
                  "live" if have["source"] == "session" and live_sessions(d) else age(d)))
 
-if tsv:
+if js:
+    def eff(d, key):
+        pct, t = reset_at(d, key)
+        if pct is None:
+            return None, None, False
+        if t and t <= time.time():
+            return 0, t, True          # window rolled over: zero, and we know it without asking
+        return pct, t, False
+    out = []
+    for name, d in targets:
+        five, ft, fi = eff(d, "five_hour")
+        seven, st_, si = eff(d, "seven_day")
+        c = cached(d)
+        out.append({"name": name, "email": email_for(d), "five": five, "seven": seven,
+                    "five_resets": ft, "seven_resets": st_, "inferred": fi or si,
+                    "age_s": int(time.time() - c["fetchedAtMs"] / 1000) if c["fetchedAtMs"] else None,
+                    "live": c["source"] == "session" and bool(live_sessions(d)),
+                    "logged_in": "claudeAiOauth" in load(os.path.join(d, ".credentials.json"))})
+    print(json.dumps(out))
+elif tsv:
     for name, d in targets:
         print("\t".join([name, compact(d, "five_hour"), compact(d, "seven_day"),
                          "live" if cached(d)["source"] == "session" and live_sessions(d) else age(d)]))
@@ -582,6 +609,67 @@ else:
 for n in notes:
     print(n, file=sys.stderr)
 LIMPY
+}
+
+rotate() {   # move off an account that is running out of room, onto the one with the most left
+  local plan pick
+  plan=$(limits --all --json | python3 -c "$(cat <<'ROTPY'
+import json, sys, time
+
+accounts = json.load(sys.stdin)
+argv = sys.argv[1:]
+at = 80
+for i, a in enumerate(argv):
+    if a == "--at" and i + 1 < len(argv):
+        at = int(argv[i + 1])
+
+live = next((a for a in accounts if a["name"] == "default"), None)
+if live is None:
+    print("ERR\tno live account"); raise SystemExit
+if live["five"] is None or live["seven"] is None:
+    print("ERR\tno usage numbers for %s yet - run `ccex limits` first" % live["email"]); raise SystemExit
+
+tripped = [w for w, v in (("5h", live["five"]), ("weekly", live["seven"])) if v >= at]
+if not tripped:
+    print("STAY\t%s is at %d%% 5h / %d%% weekly, under %d%%" %
+          (live["email"], live["five"], live["seven"], at)); raise SystemExit
+
+others = [a for a in accounts if a["name"] != "default"]
+nodata = [a["name"] for a in others if not a["logged_in"] or a["five"] is None or a["seven"] is None]
+room = [a for a in others if a["name"] not in nodata and a["five"] < at and a["seven"] < at]
+
+why = "%s is at %d%% 5h / %d%% weekly (%s over %d%%)" % (
+    live["email"], live["five"], live["seven"], " and ".join(tripped), at)
+
+if not room:
+    soon = [(a[k], a["name"]) for a in accounts for k in ("five_resets", "seven_resets")
+            if a.get(k) and a[k] > time.time()]
+    tail = ""
+    if soon:
+        t, n = min(soon)
+        left = int(t - time.time())
+        tail = "; soonest room is %s in %dh%02dm" % (n, left // 3600, left % 3600 // 60)
+    if nodata:
+        tail += "; no usage numbers for " + ", ".join(nodata)
+    print("NONE\t%s, and every other account is too%s" % (why, tail)); raise SystemExit
+
+room.sort(key=lambda a: (-min(100 - a["five"], 100 - a["seven"]), a["seven"], a["name"]))
+best = room[0]
+note = " (numbers %dm old)" % (best["age_s"] // 60) if (best["age_s"] or 0) > 900 else ""
+print("SWITCH\t%s\t%s, so -> %s at %d%% 5h / %d%% weekly%s" %
+      (best["name"], why, best["email"], best["five"], best["seven"], note))
+ROTPY
+)" "$@") || return 1
+  IFS=$'\t' read -r verdict a b <<<"$plan"
+  case "$verdict" in
+    STAY)   printf 'ccex: staying put - %s\n' "$a" ;;
+    NONE)   printf 'ccex: %s\n' "$a" >&2; return 1 ;;
+    ERR)    die "$a" ;;
+    SWITCH) pick=$a
+            printf 'ccex: %s\n' "$b"
+            case " $* " in *" -n "*|*" --dry-run "*) printf 'ccex: dry run, nothing written\n'; return 0 ;; esac
+            do_use "$pick" ;;
+  esac
 }
 
 link_shared_all() { local p; while read -r p; do link_shared "$(dir_for "$p")"; done < <(profiles); }
@@ -703,6 +791,9 @@ case "$cmd" in
   limits|usage)
     limits "$@"
     ;;
+  rotate)
+    rotate "$@"
+    ;;
   use)
     [ $# -ge 1 ] || die "usage: ccex use <account> [--dry-run] [--no-check]"
     check=1; dry=0; target=''; flags=()
@@ -715,11 +806,11 @@ case "$cmd" in
       esac
     done
     [ -n "$target" ] || die "usage: ccex use <account> [--dry-run] [--no-check]"
-    use_acct "$target" "${flags[@]+"${flags[@]}"}"
-    [ "$dry" = 1 ] && exit 0
-    link_shared_all
-    mark_switch
-    if [ "$check" = 1 ]; then limits --quiet; fi
+    if [ "$dry" = 1 ]; then
+      use_acct "$target" "${flags[@]+"${flags[@]}"}"
+      exit 0
+    fi
+    do_use "$target" "$([ "$check" = 1 ] && echo check || echo quiet)"
     ;;
   swap|promote)
     [ $# -ge 1 ] || die "usage: ccex swap <name>"
@@ -756,6 +847,8 @@ ccex — switch which Claude account Claude Code runs as
 Everyday:
   ccex ls                     list accounts; * marks the live one
   ccex use <account> [-n]     make that account live (-n / --dry-run: plan only)
+  ccex rotate [--at 80] [-n]  if the live account is near its 5h or weekly limit, switch to
+                                the account with the most room left
   ccex limits [<account>|--all] 5-hour and weekly usage limits, with reset times
                                 (add --force to re-check even if the numbers look fresh)
   ccex add <name>             browser login for another account, parked for later
