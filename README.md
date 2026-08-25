@@ -73,20 +73,28 @@ Pass `--no-check` to `use` if you'd rather it stayed quiet.
 `ccex` will not spend your quota to tell you about your quota, and it will not start a
 session on an account you aren't using. It takes the first answer it can get:
 
-1. **The clock.** A window whose reset time has passed is 0% used. That needs no asking,
-   so accounts you haven't touched in a while cost nothing to report accurately.
+1. **The clock.** A window whose reset time has passed is 0% used — that follows from
+   arithmetic, not from asking anyone, and it holds for the account you're running just as
+   much as for the ones you aren't. Such a window shows as `0% (new)`, to distinguish a
+   window that reset from one that was measured at zero.
 2. **A session you already have open.** Claude Code hands its statusline a `rate_limits`
    block on every render. Route that through `ccex record` (below) and any running session
    keeps its own account's numbers current for free.
 3. **The last known numbers**, if they were fetched in the past five minutes.
-4. **Only for the account you're actually running**, and only if none of the above
-   answered: `ccex` starts Claude Code in a pty, opens `/usage`, reads the answer and
-   quits. About eight seconds, no prompt sent, no cost — but it is a real session start,
-   so it's the last resort. `--force` demands it.
+4. **Only for the account you're actually running**, only when it has a window still
+   counting down, and only if none of the above answered: `ccex` starts Claude Code in a
+   pty, opens `/usage`, reads the answer and quits. About eight seconds, no prompt sent,
+   no cost — but it is a real session start, so it's the last resort. `--force` demands it.
 
-Parked accounts are never launched. Their numbers sit at whatever they were when that
-account was last live, ticking down to 0% as their windows expire, and get a real check
-the moment you `ccex use` them. If a session is already open on the live account but you
+In practice step 4 is reachable in one situation: you have no session open on the live
+account and its windows haven't run out yet — which is what `ccex use` walks into before
+you start working. Once a session is running, its statusline answers everything.
+
+Nothing is launched for an account whose windows have all expired, parked or live: the
+answer is already 0%, and it stays 0% until a session reports otherwise. Parked accounts
+are never launched at all — their numbers sit at whatever they were when that account was
+last live, ticking down as their windows expire, and get a real check the moment you
+`ccex use` them. If a session is already open on the live account but you
 haven't installed the recorder, `ccex` shows slightly old numbers rather than starting a
 second session behind your back.
 
