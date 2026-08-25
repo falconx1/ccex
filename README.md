@@ -89,11 +89,15 @@ ccex: limits for ada@acme.example (checked just now)
         weekly  18% used, resets 26-08 04:59 (18h27m)
 ```
 
-It switches only if the live account has crossed `--at` (default 80%) on either window.
-Among the accounts that are still under it, it picks the one whose *worst* window has the
-most room — `min(100-5h, 100-weekly)` — so an account with a fresh 5-hour window but a
-nearly spent week won't be chosen just for looking good on one axis. Ties go to the lower
-weekly figure, since that's the slower thing to get back. `-n` plans without switching.
+It switches only if the live account has crossed `--at` (default 80%) on either window —
+either one running out is enough to make an account useless to you.
+
+Among the accounts still under the threshold, it picks the one with the **most weekly room
+left**, and uses the 5-hour figure only to break ties. The two windows are not equally
+valuable: a spent 5-hour window is back this afternoon, a spent week is gone for days. So
+an account at 70% of its 5 hours but 10% of its week beats one at 0% and 30% — the first
+costs you an afternoon, the second costs you a fifth of the week. `-n` plans without
+switching.
 
 If every other account is over the threshold too, it stays put, tells you which account
 frees up soonest, and exits 1 — so `ccex rotate` is a usable cron or `/loop` line that

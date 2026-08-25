@@ -38,7 +38,9 @@ if not room:
         tail += "; no usage numbers for " + ", ".join(nodata)
     print("NONE\t%s, and every other account is too%s" % (why, tail)); raise SystemExit
 
-room.sort(key=lambda a: (-min(100 - a["five"], 100 - a["seven"]), a["seven"], a["name"]))
+# Weekly is the binding budget: it takes days to come back, where a 5-hour window is back
+# this afternoon. So rank on weekly room first and let the 5-hour figure only break ties.
+room.sort(key=lambda a: (a["seven"], a["five"], a["name"]))
 best = room[0]
 note = " (numbers %dm old)" % (best["age_s"] // 60) if (best["age_s"] or 0) > 900 else ""
 print("SWITCH\t%s\t%s, so -> %s at %d%% 5h / %d%% weekly%s" %
