@@ -29,11 +29,26 @@ monitor() {
       return "$rc"
       ;;
     watch)
-      local iv last='' now line five seven when name out
+      local iv last='' now line five seven when name out key
+      local presets=(10s 30s 1m 5m 15m 30m)
       iv=$(secs "$every"); [ "$iv" -ge 5 ] 2>/dev/null || die "monitor watch: --every must be at least 5s"
+      # A watch you cannot re-pace is a watch you end up killing and restarting.
+      wait_key() {
+        [ -t 0 ] || { sleep "$iv"; return 0; }      # piped to a file: no keys to read
+        key=; read -rsn1 -t "$iv" key || true
+        case "$key" in
+          [1-6]) every=${presets[$((key - 1))]}; iv=$(secs "$every")
+                 printf 'ccex: interval %s\n' "$every" ;;
+          r|R)   printf 'ccex: refreshing\n' ;;
+          q|Q)   printf '\n'; exit 0 ;;
+          ?)     printf 'ccex: %s? keys: 1-6 interval (%s), r refresh, q quit\n' \
+                   "$key" "${presets[*]}" ;;
+        esac
+      }
       local stamp
       stamp() { find "$CCEX_LIB" "$CCEX_BIN" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1; }
       trap 'printf "\n"; exit 0' INT
+      [ -t 0 ] && printf 'ccex: keys: 1-6 set interval (%s), r refresh now, q quit\n' "${presets[*]}"
       printf 'ccex: watching every %s, threshold %s%%%s\n' "$every" "$at" \
         "$(systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1 \
              && printf ', rotation by the timer' || printf ', rotating here')"
@@ -51,12 +66,12 @@ monitor() {
         IFS=$'\t' read -r name five seven when < <(limits --tsv --no-launch --max-age "$(secs "$refresh")") || true
         now=$(live_email)
         if [ -z "$five" ]; then
-          printf '%-9s %s\n' "$(date +%T)" "limits unavailable"; sleep "$iv"; continue
+          printf '%-9s %s\n' "$(date +%T)" "limits unavailable"; wait_key; continue
         fi
         printf '%-9s %-30s %s %s %s\n' "$(date +%T)" "$now" "$five" "$seven" "$when"
         [ -n "$last" ] && [ "$last" != "$now" ] && printf '  ^ rotated: %s -> %s\n' "$last" "$now"
         last=$now
-        sleep "$iv"
+        wait_key
       done
       ;;
     install)

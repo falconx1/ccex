@@ -151,7 +151,8 @@ TIME      ACCOUNT                        5H              WEEKLY            CHECK
 all adjustable) that runs `ccex rotate` and logs any switch it makes. `monitor status` shows when it last
 ran and what it did; `monitor stop` pauses it, `monitor uninstall` removes it.
 
-`monitor watch` prints a line per check in the foreground. If the timer is running, watch
+`monitor watch` prints a line per check in the foreground, and takes keys while it runs:
+`1`–`6` re-pace it (10s, 30s, 1m, 5m, 15m, 30m), `r` checks immediately, `q` quits. If the timer is running, watch
 only reports what the timer does; if it isn't, watch does the rotating itself, so it works
 as a foreground alternative to installing anything. Ctrl-C to stop.
 
