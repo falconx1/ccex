@@ -37,7 +37,7 @@ monitor() {
       printf 'ccex: watching every %s, threshold %s%%%s\n' "$every" "$at" \
         "$(systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1 \
              && printf ', rotation by the timer' || printf ', rotating here')"
-      printf '%-9s %-30s %-15s %-17s %s\n' TIME ACCOUNT 5H WEEKLY CHECKED
+      printf '%-9s %-30s %-18s %-22s %s\n' TIME ACCOUNT 5H WEEKLY CHECKED
       stamp=$(stamp)
       while :; do
         if [ "$(stamp)" != "$stamp" ]; then     # ccex changed on disk; a loop this long-lived should not run stale code
@@ -53,7 +53,7 @@ monitor() {
         if [ -z "$five" ]; then
           printf '%-9s %s\n' "$(date +%T)" "limits unavailable"; sleep "$iv"; continue
         fi
-        printf '%-9s %-30s %-15s %-17s %s\n' "$(date +%T)" "$now" "$five" "$seven" "$when"
+        printf '%-9s %-30s %s %s %s\n' "$(date +%T)" "$now" "$five" "$seven" "$when"
         [ -n "$last" ] && [ "$last" != "$now" ] && printf '  ^ rotated: %s -> %s\n' "$last" "$now"
         last=$now
         sleep "$iv"
