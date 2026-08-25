@@ -1,0 +1,405 @@
+#!/usr/bin/env bash
+# ccex — "cc exchange": switch Claude Code accounts by config dir. Account 1 stays in ~/.claude ("default");
+# each extra account gets its own dir under ~/.claude-profiles with shared settings/history.
+set -euo pipefail
+
+BASE="$HOME/.claude"
+ROOT="${CC_PROFILE_ROOT:-$HOME/.claude-profiles}"
+SHARED_FILES=(settings.json CLAUDE.md)
+SHARED_DIRS=(plugins projects todos tasks file-history)
+
+die() { printf 'ccex: %s\n' "$*" >&2; exit 1; }
+
+dir_for() {
+  case "$1" in
+    default) printf '%s\n' "$BASE" ;;
+    ''|.|..|*/*) die "bad profile name: '$1'" ;;
+    *) printf '%s\n' "$ROOT/$1" ;;
+  esac
+}
+
+link_shared() {
+  local d="$1" f stamp
+  [ "$d" = "$BASE" ] && return 0
+  stamp=$(date +%s)
+  mkdir -p "$d"
+  for f in "${SHARED_FILES[@]}" "${SHARED_DIRS[@]}"; do
+    [ -e "$BASE/$f" ] || continue
+    if [ -e "$d/$f" ] && [ ! -L "$d/$f" ]; then
+      mv "$d/$f" "$d/$f.local.$stamp"
+      printf 'ccex: kept a real %s aside as %s.local.%s\n' "$f" "$f" "$stamp" >&2
+    fi
+    ln -sfn "$BASE/$f" "$d/$f"
+  done
+}
+
+seed() {   # copy non-account config (onboarding, theme, folder trust) into a new profile
+  local d="$1"
+  [ "$d" = "$BASE" ] && return 0
+  mkdir -p "$d"
+  python3 - "$d" <<'SEEDPY'
+import json, os, sys
+d = sys.argv[1]
+src = os.path.expanduser("~/.claude.json")
+dst = os.path.join(d, ".claude.json")
+KEEP = ("hasCompletedOnboarding", "lastOnboardingVersion", "lastReleaseNotesSeen", "theme",
+        "installMethod", "autoUpdates", "respectGitignore", "tipsHistory", "hasSeenTasksHint",
+        "showExpandedTodos", "copyOnSelect", "migrationVersion", "hasIdeOnboardingBeenShown")
+try:
+    a = json.load(open(src))
+except Exception:
+    sys.exit(0)
+try:
+    b = json.load(open(dst))
+except Exception:
+    b = {}
+for k in KEEP:
+    if k in a and k not in b:
+        b[k] = a[k]
+proj = b.setdefault("projects", {})
+for k, v in (a.get("projects") or {}).items():
+    proj.setdefault(k, v)
+tmp = dst + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(b, f, indent=2)
+os.replace(tmp, dst)
+print("ccex: seeded onboarding + trust for %d project dirs" % len(proj), file=sys.stderr)
+SEEDPY
+}
+
+swap() {   # exchange the login of a profile with the default ~/.claude slot
+  local d="$1"
+  [ "$d" = "$BASE" ] && die "nothing to swap: that is the default slot"
+  python3 - "$d" "$ROOT" <<'SWAPPY'
+import json, os, shutil, sys, time
+prof, root = sys.argv[1], sys.argv[2]
+base = os.path.expanduser("~/.claude")
+P = {"default.credentials.json": os.path.join(base, ".credentials.json"),
+     "default.claude.json": os.path.expanduser("~/.claude.json"),
+     "profile.credentials.json": os.path.join(prof, ".credentials.json"),
+     "profile.claude.json": os.path.join(prof, ".claude.json")}
+
+def load(p):
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save(p, obj):
+    tmp = p + ".ccex.tmp"
+    with open(tmp, "w") as f:
+        json.dump(obj, f, indent=2)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, p)
+
+bc, pc = load(P["default.credentials.json"]), load(P["profile.credentials.json"])
+if "claudeAiOauth" not in bc or "claudeAiOauth" not in pc:
+    sys.exit("ccex: both slots must be logged in to swap")
+
+bak = os.path.join(root, ".backups", time.strftime("%Y%m%d-%H%M%S"))
+os.makedirs(bak, exist_ok=True)
+for name, path in P.items():
+    if os.path.exists(path):
+        shutil.copy2(path, os.path.join(bak, name))
+
+bc["claudeAiOauth"], pc["claudeAiOauth"] = pc["claudeAiOauth"], bc["claudeAiOauth"]
+bcfg, pcfg = load(P["default.claude.json"]), load(P["profile.claude.json"])
+for key in ("oauthAccount", "userID"):
+    a, b = bcfg.get(key), pcfg.get(key)
+    for cfg, val in ((bcfg, b), (pcfg, a)):
+        if val is None:
+            cfg.pop(key, None)
+        else:
+            cfg[key] = val
+save(P["default.credentials.json"], bc)
+save(P["profile.credentials.json"], pc)
+save(P["default.claude.json"], bcfg)
+save(P["profile.claude.json"], pcfg)
+print("ccex: swapped; rollback copies in %s" % bak, file=sys.stderr)
+SWAPPY
+}
+
+use_acct() {   # move a parked account's credential into the live ~/.claude slot
+  python3 - "$ROOT" "$@" <<'USEPY'
+import json, os, re, shutil, sys, time
+
+root, target = sys.argv[1], sys.argv[2]
+dry = "--dry-run" in sys.argv[3:] or "-n" in sys.argv[3:]
+base = os.path.expanduser("~/.claude")
+
+def load(p):
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save(p, obj):
+    tmp = p + ".ccex.tmp"
+    with open(tmp, "w") as f:
+        json.dump(obj, f, indent=2)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, p)
+
+def slot(d):
+    "credential path, config path, email"
+    cfg = os.path.expanduser("~/.claude.json") if d == base else os.path.join(d, ".claude.json")
+    cred = os.path.join(d, ".credentials.json")
+    email = (load(cfg).get("oauthAccount") or {}).get("emailAddress") or ""
+    return cred, cfg, email
+
+def canon(email):
+    return re.sub(r"[^a-z0-9]+", "-", email.split("@")[0].lower()).strip("-") or "account"
+
+live_cred, live_cfg, live_email = slot(base)
+if "claudeAiOauth" not in load(live_cred):
+    sys.exit("ccex: no account is logged in right now; use `ccex add <name>`")
+
+parked = {}
+if os.path.isdir(root):
+    for name in sorted(os.listdir(root)):
+        d = os.path.join(root, name)
+        if name.startswith(".") or not os.path.isdir(d):
+            continue
+        cred, cfg, email = slot(d)
+        if "claudeAiOauth" in load(cred):
+            parked[name] = (d, email)
+
+t = target.lower()
+if t in ("default", "live", "active"):
+    sys.exit("ccex: 'default' is whichever account is live; name the account you want")
+hits = [n for n, (d, e) in parked.items() if t in (n.lower(), e.lower())] or \
+       [n for n, (d, e) in parked.items() if e.lower().startswith(t) or n.lower().startswith(t)]
+if t in (live_email.lower(), canon(live_email)) or live_email.lower().startswith(t):
+    print("ccex: %s is already live" % (live_email or "that account"))
+    sys.exit(0)
+if not hits:
+    sys.exit("ccex: no parked account matches '%s' (see: ccex ls)" % target)
+if len(set(hits)) > 1:
+    sys.exit("ccex: '%s' matches %s" % (target, ", ".join(sorted(set(hits)))))
+
+src_name = hits[0]
+src_dir, src_email = parked[src_name]
+park_name = canon(live_email) if live_email else "previous"
+park_dir = os.path.join(root, park_name)
+if os.path.realpath(park_dir) == os.path.realpath(src_dir):
+    park_name += "-" + time.strftime("%H%M%S")
+    park_dir = os.path.join(root, park_name)
+
+print("ccex: %s -> parked as '%s'; %s -> live" % (live_email or "current", park_name, src_email))
+if dry:
+    print("ccex: dry run, nothing written")
+    sys.exit(0)
+
+bak = os.path.join(root, ".backups", time.strftime("%Y%m%d-%H%M%S"))
+os.makedirs(bak, exist_ok=True)
+src_cred, src_cfg, _ = slot(src_dir)
+for tag, path in (("live.credentials.json", live_cred), ("live.claude.json", live_cfg),
+                  ("incoming.credentials.json", src_cred), ("incoming.claude.json", src_cfg)):
+    if os.path.exists(path):
+        shutil.copy2(path, os.path.join(bak, tag))
+
+os.makedirs(park_dir, exist_ok=True)
+lc, sc = load(live_cred), load(src_cred)
+lcfg, scfg = load(live_cfg), load(src_cfg)
+
+pk_cred = os.path.join(park_dir, ".credentials.json")
+pk_cfg = os.path.join(park_dir, ".claude.json")
+pk = load(pk_cred)
+pk["claudeAiOauth"] = lc["claudeAiOauth"]
+pkcfg = load(pk_cfg)
+for k in ("oauthAccount", "userID"):
+    if k in lcfg:
+        pkcfg[k] = lcfg[k]
+save(pk_cred, pk)
+save(pk_cfg, pkcfg)
+
+lc["claudeAiOauth"] = sc["claudeAiOauth"]
+for k in ("oauthAccount", "userID"):
+    if k in scfg:
+        lcfg[k] = scfg[k]
+    else:
+        lcfg.pop(k, None)
+save(live_cred, lc)
+save(live_cfg, lcfg)
+
+# the source slot has handed its login to the live slot; drop it if nothing real is left
+if os.path.realpath(src_dir) != os.path.realpath(park_dir):
+    keep = [e for e in os.listdir(src_dir)
+            if not os.path.islink(os.path.join(src_dir, e))
+            and e not in (".claude.json", ".credentials.json", "backups")]
+    if not keep and os.path.dirname(os.path.realpath(src_dir)) == os.path.realpath(root):
+        shutil.rmtree(src_dir)
+print("ccex: live account is now %s (rollback: %s)" % (src_email, bak), file=sys.stderr)
+USEPY
+}
+
+link_shared_all() { local p; while read -r p; do link_shared "$(dir_for "$p")"; done < <(profiles); }
+
+profiles() {
+  printf 'default\n'
+  [ -d "$ROOT" ] || return 0
+  local p
+  for p in "$ROOT"/*/; do [ -d "$p" ] && basename "$p"; done
+}
+
+info() {
+  python3 - "$1" <<'PY'
+import json, os, sys, time
+d = sys.argv[1]
+email = tier = ""
+exp = None
+cands = [os.path.join(d, ".claude.json")]
+if os.path.realpath(d) == os.path.realpath(os.path.expanduser("~/.claude")):
+    cands.append(os.path.expanduser("~/.claude.json"))
+for c in cands:
+    try:
+        a = json.load(open(c)).get("oauthAccount", {})
+        if a.get("emailAddress"):
+            email, tier = a["emailAddress"], a.get("userRateLimitTier") or ""
+            break
+    except Exception:
+        pass
+rexp = None
+try:
+    o = json.load(open(os.path.join(d, ".credentials.json")))["claudeAiOauth"]
+    exp = o.get("expiresAt")
+    rexp = o.get("refreshTokenExpiresAt")
+except Exception:
+    pass
+rleft = rexp / 1000 - time.time() if rexp else None
+if exp:
+    left = exp / 1000 - time.time()
+    if left > 0:
+        state = "%dh%02dm left" % (left // 3600, left % 3600 // 60)
+    elif rleft is not None and rleft <= 0:
+        state = "stale (refresh expired)"
+    else:
+        state = "stale (refreshes on use)"
+else:
+    state = "NOT LOGGED IN"
+if rexp:
+    if rleft > 0:
+        rstate = "%dd left (%s)" % (rleft // 86400, time.strftime("%Y-%m-%d", time.localtime(rexp / 1000)))
+    else:
+        rstate = "EXPIRED - re-login"
+elif exp:
+    rstate = "n/a"
+else:
+    rstate = "-"
+print("\t".join([email or "-", tier or "-", state, rstate]))
+PY
+}
+
+cmd=${1:-ls}; shift || true
+case "$cmd" in
+  ls|list)
+    cur="${CLAUDE_CONFIG_DIR:-$BASE}"
+    printf '%-20s %-30s %-22s %-26s %s\n' ACCOUNT EMAIL TIER ACCESS-TOKEN REFRESH-TOKEN
+    while read -r p; do
+      d=$(dir_for "$p")
+      mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
+      IFS=$'\t' read -r email tier state rstate < <(info "$d")
+      printf '%s%-19s %-30s %-22s %-26s %s\n' "$mark" "$p" "$email" "$tier" "$state" "$rstate"
+    done < <(profiles)
+    ;;
+  add)
+    [ $# -ge 1 ] || die "usage: ccex add <name> [--email you@example.com]"
+    name=$1; shift
+    d=$(dir_for "$name")
+    [ "$d" = "$BASE" ] && die "'default' is the existing ~/.claude account"
+    link_shared "$d"
+    seed "$d"
+    printf 'ccex: logging in to profile %s (%s)\n' "$name" "$d" >&2
+    CLAUDE_CONFIG_DIR="$d" claude auth login "$@"
+    ;;
+  login|logout|status)
+    [ $# -ge 1 ] || die "usage: ccex $cmd <name>"
+    d=$(dir_for "$1"); shift
+    if [ "$d" = "$BASE" ]; then env -u CLAUDE_CONFIG_DIR claude auth "$cmd" "$@"
+    else CLAUDE_CONFIG_DIR="$d" claude auth "$cmd" "$@"; fi
+    ;;
+  run)
+    [ $# -ge 1 ] || die "usage: ccex run <name> [claude args...]"
+    d=$(dir_for "$1"); shift
+    [ -d "$d" ] || die "no such profile dir: $d (run: ccex add)"
+    if [ "$d" = "$BASE" ]; then exec env -u CLAUDE_CONFIG_DIR claude "$@"
+    else link_shared "$d"; exec env CLAUDE_CONFIG_DIR="$d" claude "$@"; fi
+    ;;
+  env)
+    [ $# -ge 1 ] || die "usage: eval \"\$(ccex env <name>)\""
+    d=$(dir_for "$1")
+    if [ "$d" = "$BASE" ]; then printf 'unset CLAUDE_CONFIG_DIR\n'
+    else printf 'export CLAUDE_CONFIG_DIR=%q\n' "$d"; fi
+    ;;
+  link)
+    if [ "${1:-}" = "--all" ]; then while read -r p; do link_shared "$(dir_for "$p")"; done < <(profiles)
+    else [ $# -ge 1 ] || die "usage: ccex link <name>|--all"; link_shared "$(dir_for "$1")"; fi
+    ;;
+  seed)
+    [ $# -ge 1 ] || die "usage: ccex seed <name>"
+    seed "$(dir_for "$1")"
+    ;;
+  use)
+    [ $# -ge 1 ] || die "usage: ccex use <account> [--dry-run]"
+    use_acct "$@"
+    [ "${2:-}" = "--dry-run" ] || [ "${2:-}" = "-n" ] || link_shared_all
+    ;;
+  swap|promote)
+    [ $# -ge 1 ] || die "usage: ccex swap <name>"
+    d=$(dir_for "$1")
+    [ -d "$d" ] || die "no such profile: $1"
+    link_shared "$d"
+    swap "$d"
+    ;;
+  rename)
+    [ $# -ge 2 ] || die "usage: ccex rename <old> <new>"
+    o=$(dir_for "$1"); n=$(dir_for "$2")
+    [ "$o" = "$BASE" ] || [ "$n" = "$BASE" ] && die "cannot rename the default slot"
+    [ -d "$o" ] || die "no such profile: $1"
+    [ -e "$n" ] && die "already exists: $2"
+    mv "$o" "$n"
+    ;;
+  which) printf '%s\n' "${CLAUDE_CONFIG_DIR:-$BASE (default)}" ;;
+  path)  dir_for "${1:-default}" ;;
+  rm)
+    [ $# -ge 1 ] || die "usage: ccex rm <name>"
+    d=$(dir_for "$1")
+    [ "$d" = "$BASE" ] && die "refusing to delete ~/.claude"
+    [ -d "$d" ] || die "no such profile: $1"
+    printf 'Delete %s (credentials + that profile'"'"'s own state; shared dirs are symlinks and survive)? [y/N] ' "$d"
+    read -r a; [ "$a" = y ] || die "aborted"
+    rm -rf "$d"
+    ;;
+  -h|--help|help)
+    cat <<'USAGE'
+ccex — switch which Claude account Claude Code runs as
+
+Everyday:
+  ccex ls                     list accounts; * marks the live one
+  ccex use <account> [-n]     make that account live (-n / --dry-run: plan only)
+  ccex add <name>             browser login for another account, parked for later
+
+Occasional:
+  ccex status <account>       claude auth status for one account
+  ccex login|logout <account> re-auth or drop one account's credential
+  ccex rename <old> <new>     rename a parked slot
+  ccex rm <account>           delete a parked slot and its credential
+  ccex run <account> [args]   launch claude as a parked account, leaving the live one alone
+  ccex env <account>          eval "$(ccex env work)" to set CLAUDE_CONFIG_DIR
+  ccex which | path <account> | link --all | seed <account>
+
+<account> is a slot name, a full email, or any unambiguous prefix of either.
+
+How it works: the live account is the ordinary ~/.claude. `use` moves only the
+claudeAiOauth key — the parked account's in, the live one's out to
+~/.claude-profiles/<email-local-part>/ — and moves the matching identity block with it.
+Settings, history, plugins and MCP tokens are untouched, so a switch changes nothing but
+who is billed. Each account's browser login happens once, ever; its refresh token lives
+in its own slot. Every write backs up to ~/.claude-profiles/.backups/<timestamp>/.
+Open sessions keep the account they started on.
+USAGE
+    ;;
+  *) die "unknown command '$cmd' (try: ccex --help)" ;;
+esac
