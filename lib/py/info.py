@@ -10,16 +10,11 @@ tier = re.sub(r"^(default_)?claude_", "", account.get("userRateLimitTier") or ""
 oauth = load(creds_for(d)).get("claudeAiOauth") or {}
 exp, rexp = oauth.get("expiresAt"), oauth.get("refreshTokenExpiresAt")
 rleft = rexp / 1000 - time.time() if rexp else None
-if exp:
-    left = exp / 1000 - time.time()
-    if left > 0:
-        state = "%dh%02dm" % (left // 3600, left % 3600 // 60)
-    elif rleft is not None and rleft <= 0:
-        state = "stale (refresh expired)"
-    else:
-        state = "stale"
-else:
+if not exp:
     state = "NOT LOGGED IN"
+else:
+    # How many hours are left on an access token is nobody's business: it renews itself.
+    state = "active" if exp / 1000 > time.time() else "stale"
 if rexp:
     rstate = time.strftime("%d-%m", time.localtime(rexp / 1000)) if rleft > 0 else "expired"
 elif exp:
