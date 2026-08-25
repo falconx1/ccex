@@ -8,6 +8,16 @@ for i, a in enumerate(argv):
     if a == "--at" and i + 1 < len(argv):
         at = int(argv[i + 1])
 
+def cap(a, key):
+    """Where this account runs out: its own cap for that window, or --at if it has none."""
+    v = a.get("cap_" + key)
+    return at if v is None else v
+
+
+def own(a, key):
+    return "its own %d%%" % a["cap_" + key] if a.get("cap_" + key) is not None else "%d%%" % at
+
+
 live = next((a for a in accounts if a["name"] == "default"), None)
 if live is None:
     print("ERR\tno live account"); raise SystemExit
@@ -18,19 +28,25 @@ if live.get("held"):
     print("STAY\t%s is held out of the pool, so nothing moves it" % live["email"])
     raise SystemExit
 
-tripped = [w for w, v in (("5h", live["five"]), ("weekly", live["seven"])) if v >= at]
+tripped = [(w, own(live, k)) for w, k, v in (("5h", "five", live["five"]),
+                                            ("weekly", "seven", live["seven"]))
+           if v >= cap(live, k)]
 if not tripped:
-    print("STAY\t%s is at %d%% 5h / %d%% weekly, under %d%%" %
-          (live["email"], live["five"], live["seven"], at)); raise SystemExit
+    under = "under %s" % own(live, "five")
+    if own(live, "five") != own(live, "seven"):
+        under = "under %s 5h / %s weekly" % (own(live, "five"), own(live, "seven"))
+    print("STAY\t%s is at %d%% 5h / %d%% weekly, %s" %
+          (live["email"], live["five"], live["seven"], under)); raise SystemExit
 
 others = [a for a in accounts if a["name"] != "default"]
 nodata = [a["name"] for a in others if not a["logged_in"] or a["five"] is None or a["seven"] is None]
 held = [a["name"] for a in others if a.get("held")]
 room = [a for a in others if a["name"] not in nodata and not a.get("held")
-        and a["five"] < at and a["seven"] < at]
+        and a["five"] < cap(a, "five") and a["seven"] < cap(a, "seven")]
 
-why = "%s is at %d%% 5h / %d%% weekly (%s over %d%%)" % (
-    live["email"], live["five"], live["seven"], " and ".join(tripped), at)
+why = "%s is at %d%% 5h / %d%% weekly (%s over %s)" % (
+    live["email"], live["five"], live["seven"],
+    " and ".join(w for w, _ in tripped), " and ".join(sorted({o for _, o in tripped})))
 
 if not room:
     soon = []
@@ -38,7 +54,7 @@ if not room:
         if a.get("held") or a["name"] in nodata:
             continue
         blocked = [a[k] for k, w in (("five_resets", "five"), ("seven_resets", "seven"))
-                   if a.get(w) is not None and a[w] >= at]
+                   if a.get(w) is not None and a[w] >= cap(a, w)]
         if blocked and all(blocked):
             soon.append((max(blocked), a["name"]))   # free only once the last one resets
     tail = ""
@@ -50,6 +66,16 @@ if not room:
         tail += "; no usage numbers for " + ", ".join(nodata)
     if held:
         tail += "; held out of the pool: " + ", ".join(held)
+    capped = []
+    for a in others:
+        if a["name"] in nodata or a.get("held"):
+            continue                   # no numbers, or already named as held
+        for w in ("five", "seven"):
+            if a.get("cap_" + w) is not None and a[w] >= a["cap_" + w]:
+                capped.append("%s at its own %d%%" % (a["name"], a["cap_" + w]))
+                break
+    if capped:
+        tail += "; capped by their own limits: " + ", ".join(capped)
     print("NONE\t%s, and every other account is too%s" % (why, tail)); raise SystemExit
 
 FIVE_HOUR, SEVEN_DAY = 5 * 3600, 7 * 86400

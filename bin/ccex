@@ -26,6 +26,8 @@ With no account, every account as one row each:
   REFRESH   when the login itself expires and needs a browser again
   5H        share of the 5-hour window spent, and how long until it resets
   WEEKLY    the same for the week
+  CAP       5h/weekly percentages this account counts as out of room at, if it sets its
+            own (`ccex pool cap`); the column is only there once something is capped
   CHECKED   how old those numbers are; `live` means a session is reporting now
 
 Reads files only — never starts a session, however stale the numbers are, unless you
@@ -54,6 +56,9 @@ onto whichever account has the most usable room. With no flag it does that once,
 
   --at N        percentage that counts as out of room (default 80)
   -n            plan only, write nothing
+
+An account with a cap of its own uses that instead of --at, in both directions -- see
+`ccex pool -h`.
 
 Keep it running:
 
@@ -97,11 +102,32 @@ U
     pool) cat <<'U'
 ccex pool out <account>    stop rotating onto that account
 ccex pool in <account>     let it be chosen again
+ccex pool cap <account> [--5h N] [--weekly N] [--clear]
 
-Its login is kept either way — this is about whether `ccex rotate` may touch it, not about
-signing out. Rotation will not choose a held account, and will not move you off one you are
-sitting on, whatever its limits say. `ccex use` still switches to one when you ask for it by
-name. Held accounts are marked x in `ccex ls`.
+Rotation rules for one account. The login is untouched by all of them — this is about what
+`ccex rotate` may do, not about signing out.
+
+out/in is the whole account: rotation will not choose a held one, and will not move you off
+one you are sitting on, whatever its limits say. `ccex use` still switches to it by name.
+Held accounts are marked x in `ccex ls`.
+
+cap is the softer version — the account stays in rotation, but counts as out of room at its
+own percentage instead of at --at:
+
+  ccex pool cap 4 --5h 60 --weekly 99   leave 40% of every 5-hour window unspent on
+                                        account 4, and let its week run to 99%
+  ccex pool cap work --5h 95            or run one right down before moving on
+  ccex pool cap work                    what it is capped at now
+  ccex pool cap work --clear            back to the --at default
+
+<account> here is the same as everywhere else: the number from `ccex ls`, a slot name, an
+email, or any unambiguous prefix.
+
+A cap applies both ways: rotation moves off that account once it crosses the cap, and will
+not land on it above the cap either. Windows you don't cap keep following --at, so one
+account can protect its week and share everyone else's 5-hour threshold. Capped accounts
+are marked c in `ccex ls`, which also grows a CAP column showing 5h/weekly once anything is
+capped -- `60/99` caps both, `-/25` only the week.
 U
 ;;
     add) cat <<'U'
@@ -134,6 +160,7 @@ ccex — switch which Claude account Claude Code runs as
   ccex rotate                 switch off the live account if it is out of room (--at 80)
   ccex rotate --bg            keep doing that in the background; --watch|--status|--log|--stop
   ccex pool out|in <account>  take an account out of the rotation pool, or put it back
+  ccex pool cap <account>     how far rotation may spend that one account (--5h, --weekly)
   ccex add <name>             browser login for another account, parked for later
   ccex rm <account>           delete a parked account and its login
   ccex run <account> [args]   run claude as a parked account, leaving the live one alone
@@ -174,20 +201,34 @@ case "$cmd" in
     how=--no-launch; case " $* " in *" --force "*) how=--force ;; esac
     if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then limits --quiet "$how" "$@"; exit 0; fi
     cur="${CLAUDE_CONFIG_DIR:-$BASE}"
-    declare -A ID FIVE SEVEN WHEN HELD
-    while IFS=$'\t' read -r n i f s w h; do
-      ID[$n]=$i; FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; HELD[$n]=$h
+    declare -A ID FIVE SEVEN WHEN FLAGS CAP
+    capcol=0
+    while IFS=$'\t' read -r n i f s w g c; do
+      ID[$n]=$i; FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; FLAGS[$n]=$g; CAP[$n]=$c
+      [ "$c" != - ] && capcol=1        # nobody has capped anything: no column, same row as before
     done < <(limits --all --tsv "$how")
-    printf '%-3s %-2s%-18s %-30s %-7s %-7s %-8s %-22s %-26s %s\n' \
-      '#' '' ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY CHECKED
+    hdr='%-3s %-2s%-18s %-30s %-7s %-7s %-8s %-22s %-26s '
+    fmt='%-3s %-2s%-18s %-30s %-7s %-7s %-8s %s %s '
+    [ "$capcol" = 1 ] && { hdr+='%-7s '; fmt+='%-7s '; }
+    hdr+='%s\n'; fmt+='%s\n'
+    capname=(); [ "$capcol" = 1 ] && capname=(CAP)
+    # shellcheck disable=SC2059
+    printf "$hdr" '#' '' ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY \
+      ${capname[@]+"${capname[@]}"} CHECKED
     while read -r p; do
       d=$(dir_for "$p")
       mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
-      [ "${HELD[$p]:-}" = held ] && mark="${mark% }x"
+      case ",${FLAGS[$p]:-}," in                 # held wins: a cap is moot on an account
+        *,held,*) mark="${mark% }x" ;;            # rotation may not choose at all
+        *,cap,*)  mark="${mark% }c" ;;
+      esac
       IFS=$'\t' read -r email tier state rstate < <(info "$d")
-      printf '%-3s %-2s%-18s %-30s %-7s %-7s %-8s %s %s %s\n' \
-        "${ID[$p]:--}" "$mark" "$p" "$email" "$tier" "$state" "$rstate" \
-        "${FIVE[$p]:--}" "${SEVEN[$p]:--}" "${WHEN[$p]:--}"
+      row=("${ID[$p]:--}" "$mark" "$p" "$email" "$tier" "$state" "$rstate" \
+           "${FIVE[$p]:--}" "${SEVEN[$p]:--}")
+      [ "$capcol" = 1 ] && row+=("${CAP[$p]:--}")
+      row+=("${WHEN[$p]:--}")
+      # shellcheck disable=SC2059
+      printf "$fmt" "${row[@]}"
     done < <(profiles) | sort -n        # by id, so the numbers you type read in order
     ;;
   add)
@@ -223,7 +264,9 @@ case "$cmd" in
   pool)
     case "${1:-}" in
       in|out) [ $# -ge 2 ] || die "usage: ccex pool $1 <account>"; py pool "$1" "$2" ;;
-      *)      die "usage: ccex pool in|out <account>" ;;
+      cap)    [ $# -ge 2 ] || die "usage: ccex pool cap <account> [--5h N] [--weekly N] [--clear]"
+              py pool "$@" ;;
+      *)      die "usage: ccex pool in|out|cap <account>" ;;
     esac
     ;;
   rotate)

@@ -51,6 +51,16 @@ t() {   # t <name> <expected substring> <command...>
   fi
 }
 
+absent() {   # absent <name> <substring that must not appear> <command...>
+  local name=$1 nope=$2; shift 2
+  local got; got=$("$@" 2>&1)
+  if [[ $got != *"$nope"* ]]; then
+    pass=$((pass + 1)); printf '  ok   %s\n' "$name"
+  else
+    fail=$((fail + 1)); printf '  FAIL %s\n       should not contain: %s\n' "$name" "$nope"
+  fi
+}
+
 exits() {   # exits <name> <expected code> <command...>
   local name=$1 want=$2; shift 2
   "$@" >/dev/null 2>&1; local got=$?
@@ -91,7 +101,36 @@ t  "rotation leaves it alone"    "held out of the pool"  "$CCEX" rotate --at 1 -
 t  "release it"                  "back in the rotation"  "$CCEX" pool in a@example.com
 t  "mark is cleared"             ""                      mark_of a@example.com
 
+echo "per-account caps"
+teardown; setup                 # earlier sections have rotated; start from a is live, 90/40
+absent "no caps means no CAP column" "CAP"                 "$CCEX" ls
+t  "cap needs a real percentage"  "1 to 100"              "$CCEX" pool cap bee --5h 101
+t  "and 0 points at pool out"     "pool out"              "$CCEX" pool cap bee --5h 0
+t  "an unknown cap flag is refused" "unknown option"      "$CCEX" pool cap bee --5hr 60
+t  "no cap is the --at default"   "no cap of its own"     "$CCEX" pool cap bee
+t  "set one window"               "5h 5%"                 "$CCEX" pool cap bee --5h 5
+t  "the other still follows --at" "weekly still follows"  "$CCEX" pool cap bee --5h 5
+t  "capped is marked c"           "c"                     mark_of b@example.com
+n_bee=$("$CCEX" ls | awk '/b@example.com/ {print $1}')
+t  "cap by account number"        "5h 60%, weekly 99%"    "$CCEX" pool cap "$n_bee" --5h 60 --weekly 99
+t  "and reads back by number"     "is capped at"          "$CCEX" pool cap "$n_bee"
+t  "ls grows a CAP column"        "CAP"                   "$CCEX" ls
+t  "showing both windows"         "60/99"                 "$CCEX" ls
+t  "and a dash for an uncapped one" "5/-"                 bash -c '"$1" pool cap cee --5h 5 >/dev/null; "$1" ls' _ "$CCEX"
+"$CCEX" pool cap cee --clear >/dev/null
+t  "an unknown number is refused" "no account matches"    "$CCEX" pool cap 9 --5h 60
+"$CCEX" pool cap bee --5h 5 >/dev/null
+t  "a cap above --at protects it" "under its own 95%"     bash -c '"$1" pool cap a@example.com --5h 95 >/dev/null; "$1" rotate --at 80 -n --no-launch' _ "$CCEX"
+t  "a capped account is skipped"  "c@example.com"         bash -c '"$1" pool cap a@example.com --clear >/dev/null; "$1" rotate --at 80 -n --no-launch' _ "$CCEX"
+t  "and the reason is named"      "capped by their own"   bash -c '"$1" pool cap cee --5h 45 >/dev/null; "$1" rotate --at 80 -n --no-launch' _ "$CCEX"
+exits "nowhere to go exits 1"     1                       "$CCEX" rotate --at 80 -n --no-launch
+t  "clearing restores the default" "back on the --at default" "$CCEX" pool cap cee --clear
+t  "held wins over a cap in ls"   "x"                     bash -c '"$1" pool out bee >/dev/null; "$1" ls | awk "/b@example.com/ {print substr(\$0, 5, 2)}"' _ "$CCEX"
+"$CCEX" pool in bee >/dev/null
+t  "rm releases the cap too"      "no b@example.com"      bash -c 'printf "y\n" | "$1" rm bee >/dev/null 2>&1; grep -q b@example.com "$2/.caps.json" && echo "still there" || echo "no b@example.com"' _ "$CCEX" "$CC_PROFILE_ROOT"
+
 echo "rotation"
+teardown; setup                 # the cap section removed an account; rotation wants all three
 t  "under threshold stays"       "staying put"           "$CCEX" rotate --at 99 -n
 t  "over threshold plans a move" "so ->"                 "$CCEX" rotate --at 45 -n --no-launch
 t  "dry run writes nothing"      "dry run"               "$CCEX" rotate --at 45 -n --no-launch

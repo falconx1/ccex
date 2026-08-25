@@ -5,7 +5,7 @@ last measured, or from the clock. Only the live account is ever asked directly.
 """
 import datetime, json, os, pty, select, signal, sys, time
 
-from ccexlib import (BASE, cfg_for, creds_for, email_for, expand, held, hm, id_for,
+from ccexlib import (BASE, caps, cfg_for, creds_for, email_for, expand, held, hm, id_for,
                      is_base, load, logged_in, slots, snap_path)
 
 argv = sys.argv[1:]
@@ -292,19 +292,29 @@ if js:
                     "age_s": int(time.time() - c["fetchedAtMs"] / 1000) if c["fetchedAtMs"] else None,
                     "live": c["source"] == "session" and bool(live_sessions(d)),
                     "held": held(d),
+                    "cap_five": caps(d)[0], "cap_seven": caps(d)[1],
                     "logged_in": logged_in(d)})
     print(json.dumps(out))
 elif tsv:
     for name, d in targets:
+        c5, c7 = caps(d)
+        # One flags field, never empty: IFS=$'\t' collapses runs of tabs, so an empty
+        # column would shift every field after it in the shell that reads this.
+        flags = ",".join(f for f in ("held" if held(d) else "", "cap" if (c5 or c7) else "") if f)
         print("\t".join([name, str(id_for(d) or "-"),
                          compact(d, "five_hour").ljust(22), compact(d, "seven_day").ljust(26),
                          "live" if cached(d)["source"] == "session" and live_sessions(d) else age(d),
-                         "held" if held(d) else ""]))
+                         flags or "-",
+                         "%s/%s" % (c5 or "-", c7 or "-") if (c5 or c7) else "-"]))
 elif quiet and len(rows) == 1:
     name, email, five, seven, a = rows[0]
     print("ccex: limits for %s (%s)" % (email, a if a == "live" else "checked " + a))
     print("        5h      %s" % five)
     print("        weekly  %s" % seven)
+    c5, c7 = caps(targets[0][1])
+    if c5 or c7:                  # only worth a line when this account sets its own
+        print("        cap     %s (its own; uncapped windows follow --at, default 80)" %
+              " / ".join("%s %d%%" % (w, v) for w, v in (("5h", c5), ("weekly", c7)) if v))
 else:
     print("%-20s %-30s %-44s %-48s %s" % ("ACCOUNT", "EMAIL", "5-HOUR", "WEEKLY", "CHECKED"))
     for name, email, five, seven, a in rows:

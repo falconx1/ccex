@@ -67,11 +67,23 @@ def snap_path(email):
 
 IDS = os.path.join(ROOT, ".ids.json")
 POOL = os.path.join(ROOT, ".pool.json")
+CAPS = os.path.join(ROOT, ".caps.json")
 
 
 def held(d):
     """True when this account has been taken out of the rotation pool."""
     return bool(load(POOL).get(email_for(d)))
+
+
+def caps(d):
+    """This account's own out-of-room percentages, per window, or None where it has none.
+
+    A cap is how far you are willing to let one account be spent, whatever `--at` says:
+    lower to keep room in reserve on it, higher to run it down before moving on. Unset
+    windows fall back to --at, so an account nobody has capped behaves exactly as before.
+    """
+    c = load(CAPS).get(email_for(d)) or {}
+    return c.get("five_hour"), c.get("seven_day")
 
 
 _ids = None

@@ -71,8 +71,8 @@ monitor() {
             *) printf '%s\n' "$out" ;;              # nowhere to go, or something broke
           esac
         fi
-        name= id= five= seven= when= heldmark=
-        IFS=$'\t' read -r name id five seven when heldmark \
+        name= id= five= seven= when= flags= capcell=
+        IFS=$'\t' read -r name id five seven when flags capcell \
           < <(limits --tsv --no-launch --max-age "$(secs "$refresh")") || true
         now=$(live_email)
         if [ -z "$five" ]; then

@@ -72,6 +72,7 @@ until you `ccex rm` it, which releases the number for the next account to take.
 | `ccex run <account> [args]` | launch `claude` as a parked account, leaving the live one alone |
 | `ccex env <account>` | `eval "$(ccex env work)"` to set `CLAUDE_CONFIG_DIR` in your shell |
 | `ccex pool out \| in <account>` | take an account out of the rotation pool, or put it back |
+| `ccex pool cap <account>` | how far rotation may spend that one account — see below |
 | `ccex rm <account>` | delete a parked slot and its credential |
 | `ccex record` | the statusline filter that keeps limits current — see below |
 | `ccex record --install` | wire it into your statusline, once |
@@ -209,6 +210,72 @@ ccex: ada.lovelace@gmail.com is held out of the pool; `ccex pool in 4` first
 When nothing is eligible, the message names the accounts that were held, so an empty pool
 never looks like a bug.
 
+### Capping one account's share
+
+`--at` is one threshold for every account. A cap is the per-account version: how far *that*
+account may be spent, in either window, whatever `--at` says.
+
+```console
+$ ccex pool cap 2 --5h 50 --weekly 30
+ccex: ada.lovelace@gmail.com is out of room at 5h 50%, weekly 30%
+
+$ ccex pool cap client-acme --5h 95
+ccex: ada@acme.example is out of room at 5h 95%
+ccex: weekly still follows --at
+```
+
+The account is named the same way as everywhere else — the number from `ccex ls`, a slot
+name, an email, or an unambiguous prefix.
+
+Lower than `--at` to keep something in reserve — half of every 5-hour window and 70% of the
+week stay unspent on `personal` above, so it is there when you need it rather than being
+drained by rotation first. Higher than `--at` to run an account right down before moving on,
+which is what you want for the account you'd rather bill.
+
+A cap works in both directions, like `--at` does: rotation moves off that account once it
+crosses its own cap, and won't land on it above its cap either. Windows you don't cap keep
+following `--at`, so one account can protect its week and share everyone else's 5-hour
+threshold. The messages say which number applied, so a rotation that looks early or late
+explains itself:
+
+```console
+$ ccex rotate
+ccex: staying put - ada@acme.example is at 90% 5h / 40% weekly, under its own 95% 5h / 80% weekly
+
+$ ccex rotate
+ccex: ada@example.com is at 90% 5h / 40% weekly (5h over 80%), and every other account is
+too; capped by their own limits: personal at its own 50%
+```
+
+Capped accounts are marked `c` in `ccex ls`, which also grows a `CAP` column once anything
+is capped — `60/99` caps both windows, `-/25` only the week, `-` neither. The column isn't
+there at all until you cap something, so a setup that doesn't use caps reads exactly as
+before:
+
+```console
+$ ccex ls
+#   ACCOUNT        EMAIL                    TIER    TOKEN   REFRESH  5H                     WEEKLY                     CAP     CHECKED
+1   *default       ada@example.com          max_5x  active  20-09    ████░░░░░░   41% 3h21m ██░░░░░░░░   23% 14h41m   -       live
+2   c personal     ada.lovelace@gmail.com   pro     stale   21-09    ░░░░░░░░░░    4% 1h41m ██░░░░░░░░   18% 18h41m   50/30   8m ago
+3    client-acme   ada@acme.example         max_5x  active  22-09    █░░░░░░░░░    9% 2h51m ████░░░░░░   36% 4d 8h41m  95/-    4m ago
+```
+
+`ccex ls <account>` prints it in full:
+
+```console
+$ ccex ls personal
+ccex: limits for ada.lovelace@gmail.com (checked 4m ago)
+        5h      ████░░░░░░   41% used, resets 14:10 (3h21m)
+        weekly  ██░░░░░░░░   23% used, resets 26-08 13:10 (14h41m)
+        cap     5h 50% / weekly 30% (its own; uncapped windows follow --at, default 80)
+```
+
+`ccex pool cap <account>` on its own reports what is set; `--clear` puts the account back on
+the `--at` default. Caps live in `~/.claude-profiles/.caps.json`, keyed by email like the
+account numbers, so they survive rotations and renames. A held account outranks its own cap
+— rotation may not touch it at all — so `ccex ls` shows `x` rather than `c` for one that is
+both.
+
 ### Where the numbers come from
 
 `ccex` will not spend your quota to tell you about your quota, and it will not start a
@@ -285,6 +352,9 @@ a switch.
 renews it silently, so `stale` is normal and harmless — it only means nothing has used
 that account lately.
 
+**CAP** is only present once some account has one, and shows that account's own
+out-of-room percentages as `5h/weekly` — `-` for a window that still follows `--at`.
+
 **5H** and **WEEKLY** each show how much of that window is spent, then how long until it
 resets. Note that the two don't rank accounts the same way: `22% 26m` is a better place to
 land than `18% 17h24m`, because the first is minutes from starting over. `ccex rotate`
@@ -344,10 +414,10 @@ actually help the work you're in the middle of.
 ./test/run.sh
 ```
 
-45 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
-switching by name and number, exit codes, the pool, rotation decisions, the statusline
-install, help for every command, and that parking never overwrites another account's
-login. No network, no `claude`
+66 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
+switching by name and number, exit codes, the pool, per-account caps, rotation decisions,
+the statusline install, help for every command, and that parking never overwrites another
+account's login. No network, no `claude`
 binary, nothing written outside a temp directory.
 
 ## Layout
@@ -367,8 +437,8 @@ lib/py/record.py      statusline payload in, limits snapshot out
 lib/py/statusline.py  the one-time statusLine edit in settings.json
 lib/py/info.py        one `ccex ls` row
 lib/py/seed.py        onboarding and trust for a fresh profile
-lib/py/pool.py        holding an account out of rotation, and putting it back
-lib/py/forget.py      releasing a number when an account is removed
+lib/py/pool.py        holding an account out of rotation, and capping how far it is spent
+lib/py/forget.py      releasing a number, pool entry and cap when an account is removed
 share/statusline.sh   the bundled statusline, installed when you have none
 test/run.sh           the suite above
 ```
