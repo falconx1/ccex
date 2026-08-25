@@ -105,7 +105,7 @@ for name, path in P.items():
 
 bc["claudeAiOauth"], pc["claudeAiOauth"] = pc["claudeAiOauth"], bc["claudeAiOauth"]
 bcfg, pcfg = load(P["default.claude.json"]), load(P["profile.claude.json"])
-for key in ("oauthAccount", "userID"):
+for key in ("oauthAccount", "userID", "cachedUsageUtilization"):
     a, b = bcfg.get(key), pcfg.get(key)
     for cfg, val in ((bcfg, b), (pcfg, a)):
         if val is None:
@@ -209,14 +209,14 @@ pk_cfg = os.path.join(park_dir, ".claude.json")
 pk = load(pk_cred)
 pk["claudeAiOauth"] = lc["claudeAiOauth"]
 pkcfg = load(pk_cfg)
-for k in ("oauthAccount", "userID"):
+for k in ("oauthAccount", "userID", "cachedUsageUtilization"):
     if k in lcfg:
         pkcfg[k] = lcfg[k]
 save(pk_cred, pk)
 save(pk_cfg, pkcfg)
 
 lc["claudeAiOauth"] = sc["claudeAiOauth"]
-for k in ("oauthAccount", "userID"):
+for k in ("oauthAccount", "userID", "cachedUsageUtilization"):
     if k in scfg:
         lcfg[k] = scfg[k]
     else:
@@ -235,6 +235,307 @@ print("ccex: live account is now %s (rollback: %s)" % (src_email, bak), file=sys
 USEPY
 }
 
+mark_switch() {   # sessions started before this moment still hold the old account's token
+  mkdir -p "$ROOT/.usage"
+  date +%s000 > "$ROOT/.usage/.switched"
+}
+
+record() {   # read a Claude Code statusline payload on stdin, note the limits, pass it through
+  local input now last stamp prog
+  IFS= read -r -d '' input || true
+  printf '%s' "$input"             # a statusline filter must be transparent, always
+  printf -v now '%(%s)T' -1
+  stamp="$ROOT/.usage/.stamp-$(basename "${CLAUDE_CONFIG_DIR:-default}")"
+  last=0; [ -f "$stamp" ] && read -r last < "$stamp" || true
+  [ $((now - last)) -lt 15 ] && return 0    # renders are constant; one write every 15s is plenty
+  mkdir -p "$ROOT/.usage" && printf '%s\n' "$now" > "$stamp"
+  prog=$(cat <<'RECPY'
+import datetime, json, os, re, sys, time
+
+root = sys.argv[1]
+raw = sys.stdin.read()
+try:
+    payload = json.loads(raw)
+    rl = payload.get("rate_limits") or {}
+    cfg = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], ".claude.json") if os.environ.get("CLAUDE_CONFIG_DIR") \
+        else os.path.expanduser("~/.claude.json")
+    with open(cfg) as f:
+        email = (json.load(f).get("oauthAccount") or {}).get("emailAddress")
+    if not (email and rl):
+        raise SystemExit
+    util = {}
+    for k in ("five_hour", "seven_day"):
+        v = rl.get(k)
+        if not isinstance(v, dict):
+            continue
+        ra = v.get("resets_at")
+        util[k] = {"utilization": v.get("used_percentage"),
+                   "resets_at": datetime.datetime.fromtimestamp(ra, datetime.timezone.utc).isoformat() if ra else None}
+    tp = payload.get("transcript_path") or ""
+    try:
+        started = int(os.path.getctime(tp) * 1000)   # a session predating a switch is not this account
+    except OSError:
+        started = int(time.time() * 1000)
+    d = os.path.join(root, ".usage")
+    os.makedirs(d, exist_ok=True)
+    out = os.path.join(d, re.sub(r"[^A-Za-z0-9]+", "_", email.lower()) + ".json")
+    tmp = out + ".tmp.%d" % os.getpid()
+    with open(tmp, "w") as f:
+        json.dump({"email": email, "fetchedAtMs": int(time.time() * 1000), "utilization": util,
+                   "sessionId": payload.get("session_id"), "startedAtMs": started}, f)
+    os.replace(tmp, out)
+except Exception:
+    pass
+RECPY
+)
+  printf '%s' "$input" | python3 -c "$prog" "$ROOT" >/dev/null
+}
+
+limits() {   # drive the real Claude Code TUI to refresh usage, then report the 5h and weekly windows
+  python3 - "$ROOT" "$@" <<'LIMPY'
+import datetime, json, os, pty, re, select, signal, sys, time
+
+root, argv = sys.argv[1], sys.argv[2:]
+base = os.path.expanduser("~/.claude")
+quiet = "--quiet" in argv
+every = "--all" in argv
+force = "--force" in argv
+args = [a for a in argv if not a.startswith("-")]
+
+def load(p):
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def is_base(d):
+    return os.path.realpath(d) == os.path.realpath(base)
+
+def cfg_for(d):
+    return os.path.expanduser("~/.claude.json") if is_base(d) else os.path.join(d, ".claude.json")
+
+def email_for(d):
+    return (load(cfg_for(d)).get("oauthAccount") or {}).get("emailAddress") or "-"
+
+def slots():
+    out = [("default", base)]
+    if os.path.isdir(root):
+        for n in sorted(os.listdir(root)):
+            d = os.path.join(root, n)
+            if not n.startswith(".") and os.path.isdir(d):
+                out.append((n, d))
+    return out
+
+USAGE_DIR = os.path.join(root, ".usage")
+
+def switched_at():
+    try:
+        with open(os.path.join(USAGE_DIR, ".switched")) as f:
+            return int(f.read().strip())
+    except Exception:
+        return 0
+
+def live_sessions(d):
+    """PIDs of Claude Code sessions currently running as this account (Linux only)."""
+    out = []
+    if not os.path.isdir("/proc"):
+        return out
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % pid, "rb") as f:
+                argv = f.read().split(b"\0")
+            if not argv or os.path.basename(argv[0].decode("utf8", "replace")) != "claude":
+                continue
+            with open("/proc/%s/environ" % pid, "rb") as f:
+                env = dict(e.split(b"=", 1) for e in f.read().split(b"\0") if b"=" in e)
+            cd = env.get(b"CLAUDE_CONFIG_DIR", b"").decode("utf8", "replace") or base
+            if os.path.realpath(cd) == os.path.realpath(d):
+                out.append(int(pid))
+        except (OSError, ValueError):
+            continue
+    return out
+
+def snap_path(email):
+    return os.path.join(USAGE_DIR, re.sub(r"[^A-Za-z0-9]+", "_", email.lower()) + ".json")
+
+def cached(d):
+    """Freshest limits we have: a running session's statusline beats the on-disk cache."""
+    cfg = load(cfg_for(d))
+    c = cfg.get("cachedUsageUtilization") or {}
+    if c.get("accountUuid") and c["accountUuid"] != (cfg.get("oauthAccount") or {}).get("accountUuid"):
+        c = {}                     # left behind by whoever held this slot before
+    best = {"fetchedAtMs": c.get("fetchedAtMs") or 0,
+            "utilization": c.get("utilization") or {}, "source": "cache"}
+    snap = load(snap_path(email_for(d)))
+    if snap.get("startedAtMs", 0) < switched_at():
+        snap = {}
+    if (snap.get("fetchedAtMs") or 0) > best["fetchedAtMs"]:
+        best = {"fetchedAtMs": snap["fetchedAtMs"], "utilization": snap.get("utilization") or {},
+                "source": "session"}
+    return best
+
+def hm(sec):
+    sec = int(sec)
+    return "%dh%02dm" % (sec // 3600, sec % 3600 // 60) if sec >= 3600 else "%dm" % (sec // 60)
+
+def trusted_dir(cfg):
+    for path, v in (load(cfg).get("projects") or {}).items():
+        if isinstance(v, dict) and v.get("hasTrustDialogAccepted") and os.path.isdir(path):
+            return path
+    return None
+
+def probe(d, timeout=50):
+    """Launch the real `claude` TUI on this account, open /usage, quit. No inference, no cost."""
+    cfg = cfg_for(d)
+    before = cached(d).get("fetchedAtMs") or 0
+    cwd = trusted_dir(cfg)
+    if not cwd:
+        return "untrusted"
+    if not os.path.exists(os.path.join(d, ".credentials.json")):
+        return "nologin"
+    pid, fd = pty.fork()
+    if pid == 0:
+        for k in list(os.environ):
+            if k.startswith("CLAUDE_CODE_") or k in ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT"):
+                os.environ.pop(k, None)
+        if is_base(d):
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            os.environ["CLAUDE_CONFIG_DIR"] = d
+        os.environ.update(TERM="xterm-256color", COLUMNS="120", LINES="45")
+        try:
+            os.chdir(cwd)
+            os.execvp("claude", ["claude", "--model", "claude-haiku-4-5-20251001"])
+        except Exception:
+            os._exit(127)
+    start = time.time()
+    sent, refreshed, quit_at, mtime, buf, ready_at, tries = set(), False, None, 0, b"", None, 0
+    while time.time() - start < timeout:
+        r, _, _ = select.select([fd], [], [], 0.3)
+        if r:
+            try:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                buf = (buf + chunk)[-8192:]
+            except OSError:
+                break
+        el = time.time() - start
+        if ready_at is None and (b"\xe2\x9d\xaf" in buf or b"shift+tab" in buf):
+            ready_at = time.time()          # the prompt is up; the TUI is listening
+        if not refreshed and ready_at and time.time() - ready_at > 1.5 and tries * 7 < el - 1:
+            os.write(fd, b"\x1b/usage\r")  # esc first, so a retry never appends to a live prompt
+            tries += 1
+            sent.add("usage")
+        if el > 20 and not refreshed and "nudge" not in sent:
+            os.write(fd, b"\r"); sent.add("nudge")
+        if not refreshed:
+            try:
+                m = os.stat(cfg).st_mtime
+            except OSError:
+                m = mtime
+            if m != mtime:
+                mtime = m
+                refreshed = (cached(d).get("fetchedAtMs") or 0) > before
+        if (refreshed or el > timeout - 6) and "quit" not in sent:
+            os.write(fd, b"/exit\r"); sent.add("quit"); quit_at = time.time()
+        if quit_at and time.time() - quit_at > 2:
+            break
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.kill(pid, sig); time.sleep(0.3)
+        except OSError:
+            break
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except OSError:
+        pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return "ok" if (cached(d).get("fetchedAtMs") or 0) > before else "timeout"
+
+def window(d, key):
+    v = (cached(d)["utilization"] or {}).get(key)
+    if not isinstance(v, dict) or v.get("utilization") is None:
+        return "-"
+    pct, ra = v["utilization"], v.get("resets_at")
+    if not ra:
+        return "%d%% used" % pct
+    t = datetime.datetime.fromisoformat(ra).timestamp()
+    left = t - time.time()
+    if left <= 0:
+        return "%d%% used - window rolled over" % pct
+    return "%d%% used, resets %s (%s)" % (pct, time.strftime("%b %-d %H:%M", time.localtime(t)), hm(left))
+
+def age(d):
+    c = cached(d)
+    f, src = c.get("fetchedAtMs"), c.get("source")
+    if not f:
+        return "never checked"
+    a = time.time() - f / 1000
+    when = "just now" if a < 90 else "%s ago" % hm(a)
+    return "%s, from the running session" % when if src == "session" else when
+
+NOTE = {"untrusted": "no trusted project dir - launch `claude` once in one of your project folders first; showing cached numbers",
+        "nologin": "not logged in",
+        "timeout": "limits check timed out; showing cached numbers",
+        "unhooked": "a session is open on this account, so nothing was launched. For live numbers put "
+                    "`ccex record |` in front of your statusLine command (see `ccex --help`); "
+                    "showing cached numbers"}
+
+targets = []
+if every:
+    targets = slots()
+elif not args:
+    targets = [("default", base)]
+else:
+    for t in [a.lower() for a in args]:
+        hit = [(n, d) for n, d in slots() if t in (n.lower(), email_for(d).lower())] or \
+              [(n, d) for n, d in slots() if n.lower().startswith(t) or email_for(d).lower().startswith(t)]
+        if not hit:
+            sys.exit("ccex: no account matches '%s' (see: ccex ls)" % t)
+        if len(hit) > 1:
+            sys.exit("ccex: '%s' matches %s" % (t, ", ".join(n for n, _ in hit)))
+        targets.append(hit[0])
+
+rows, notes = [], []
+for name, d in targets:
+    have = cached(d)
+    fresh = have["fetchedAtMs"] and time.time() - have["fetchedAtMs"] / 1000 < 300
+    if force:
+        st = probe(d)
+    elif have["source"] == "session" and live_sessions(d):
+        st = "ok"                      # a session is open on this account and reporting; touch nothing
+    elif fresh:
+        st = "ok"                      # someone checked moments ago; no reason to ask again
+    elif live_sessions(d):
+        st = "unhooked"                # don't start a second session behind a running one
+    else:
+        st = probe(d)                  # last resort: open the TUI just long enough to read /usage
+    if st != "ok":
+        notes.append("ccex: %s: %s" % (name, NOTE.get(st, st)))
+    rows.append((name, email_for(d), window(d, "five_hour"), window(d, "seven_day"), age(d)))
+
+if quiet and len(rows) == 1:
+    name, email, five, seven, a = rows[0]
+    print("ccex: limits for %s (checked %s)" % (email, a))
+    print("        5h      %s" % five)
+    print("        weekly  %s" % seven)
+else:
+    print("%-20s %-30s %-34s %s" % ("ACCOUNT", "EMAIL", "5-HOUR", "WEEKLY (ALL MODELS)"))
+    for name, email, five, seven, a in rows:
+        mark = "*" if name == "default" else " "
+        print("%s%-19s %-30s %-34s %s" % (mark, name, email, five, seven))
+for n in notes:
+    print(n, file=sys.stderr)
+LIMPY
+}
+
 link_shared_all() { local p; while read -r p; do link_shared "$(dir_for "$p")"; done < <(profiles); }
 
 profiles() {
@@ -246,7 +547,7 @@ profiles() {
 
 info() {
   python3 - "$1" <<'PY'
-import json, os, sys, time
+import json, os, re, sys, time
 d = sys.argv[1]
 email = tier = ""
 exp = None
@@ -257,7 +558,8 @@ for c in cands:
     try:
         a = json.load(open(c)).get("oauthAccount", {})
         if a.get("emailAddress"):
-            email, tier = a["emailAddress"], a.get("userRateLimitTier") or ""
+            email = a["emailAddress"]
+            tier = re.sub(r"^(default_)?claude_", "", a.get("userRateLimitTier") or "")
             break
     except Exception:
         pass
@@ -296,12 +598,12 @@ cmd=${1:-ls}; shift || true
 case "$cmd" in
   ls|list)
     cur="${CLAUDE_CONFIG_DIR:-$BASE}"
-    printf '%-20s %-30s %-22s %-26s %s\n' ACCOUNT EMAIL TIER ACCESS-TOKEN REFRESH-TOKEN
+    printf '%-20s %-30s %-8s %-26s %s\n' ACCOUNT EMAIL TIER ACCESS-TOKEN REFRESH-TOKEN
     while read -r p; do
       d=$(dir_for "$p")
       mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
       IFS=$'\t' read -r email tier state rstate < <(info "$d")
-      printf '%s%-19s %-30s %-22s %-26s %s\n' "$mark" "$p" "$email" "$tier" "$state" "$rstate"
+      printf '%s%-19s %-30s %-8s %-26s %s\n' "$mark" "$p" "$email" "$tier" "$state" "$rstate"
     done < <(profiles)
     ;;
   add)
@@ -341,10 +643,33 @@ case "$cmd" in
     [ $# -ge 1 ] || die "usage: ccex seed <name>"
     seed "$(dir_for "$1")"
     ;;
+  record)
+    record
+    ;;
+  limits|usage)
+    while read -r p; do
+      d=$(dir_for "$p")
+      [ "$d" = "$BASE" ] || { link_shared "$d"; seed "$d" >/dev/null 2>&1; }
+    done < <(profiles)
+    limits "$@"
+    ;;
   use)
-    [ $# -ge 1 ] || die "usage: ccex use <account> [--dry-run]"
-    use_acct "$@"
-    [ "${2:-}" = "--dry-run" ] || [ "${2:-}" = "-n" ] || link_shared_all
+    [ $# -ge 1 ] || die "usage: ccex use <account> [--dry-run] [--no-check]"
+    check=1; dry=0; target=''; flags=()
+    for a in "$@"; do
+      case "$a" in
+        --no-check)     check=0 ;;
+        -n|--dry-run)   dry=1; flags+=("$a") ;;
+        -*)             flags+=("$a") ;;
+        *)              [ -n "$target" ] && die "use takes one account, got '$target' and '$a'"; target=$a ;;
+      esac
+    done
+    [ -n "$target" ] || die "usage: ccex use <account> [--dry-run] [--no-check]"
+    use_acct "$target" "${flags[@]+"${flags[@]}"}"
+    [ "$dry" = 1 ] && exit 0
+    link_shared_all
+    mark_switch
+    if [ "$check" = 1 ]; then limits --quiet; fi
     ;;
   swap|promote)
     [ $# -ge 1 ] || die "usage: ccex swap <name>"
@@ -352,6 +677,8 @@ case "$cmd" in
     [ -d "$d" ] || die "no such profile: $1"
     link_shared "$d"
     swap "$d"
+    mark_switch
+    limits --quiet
     ;;
   rename)
     [ $# -ge 2 ] || die "usage: ccex rename <old> <new>"
@@ -379,6 +706,8 @@ ccex — switch which Claude account Claude Code runs as
 Everyday:
   ccex ls                     list accounts; * marks the live one
   ccex use <account> [-n]     make that account live (-n / --dry-run: plan only)
+  ccex limits [<account>|--all] 5-hour and weekly usage limits, with reset times
+                                (add --force to re-check even if the numbers look fresh)
   ccex add <name>             browser login for another account, parked for later
 
 Occasional:
@@ -389,6 +718,12 @@ Occasional:
   ccex run <account> [args]   launch claude as a parked account, leaving the live one alone
   ccex env <account>          eval "$(ccex env work)" to set CLAUDE_CONFIG_DIR
   ccex which | path <account> | link --all | seed <account>
+
+Live limits from your statusline (optional, no extra process):
+  put `ccex record |` at the front of your statusLine command in settings.json, e.g.
+  "command": "ccex record | ~/.claude/statusline-command.sh"
+  Every running session then keeps its own account's numbers current, and `ccex limits`
+  reads them instead of launching anything.
 
 <account> is a slot name, a full email, or any unambiguous prefix of either.
 
