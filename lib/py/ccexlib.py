@@ -61,15 +61,6 @@ def slots():
     return out
 
 
-def switched_at():
-    """When an account last became live, in ms. Sessions older than this hold the previous login."""
-    try:
-        with open(os.path.join(USAGE_DIR, ".switched")) as f:
-            return int(f.read().strip())
-    except Exception:
-        return 0
-
-
 def snap_path(email):
     return os.path.join(USAGE_DIR, re.sub(r"[^A-Za-z0-9]+", "_", email.lower()) + ".json")
 

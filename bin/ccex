@@ -160,7 +160,8 @@ claudeAiOauth key — the parked account's in, the live one's out to
 Settings, history, plugins and MCP tokens are untouched, so a switch changes nothing but
 who is billed. Each account's browser login happens once, ever; its refresh token lives
 in its own slot. Every write backs up to ~/.claude-profiles/.backups/<timestamp>/.
-Open sessions keep the account they started on.
+Sessions you already have open follow the switch: they re-read the credential, so they
+bill the new account from their next request on.
 USAGE
     ;;
   *) die "unknown command '$cmd' (try: ccex --help)" ;;

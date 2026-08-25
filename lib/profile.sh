@@ -26,11 +26,6 @@ seed() {   # copy non-account config (onboarding, theme, folder trust) into a ne
 
 use_acct() { py use "$@"; }   # move a parked account's credential into the live ~/.claude slot
 
-mark_switch() {   # sessions started before this moment still hold the old account's token
-  mkdir -p "$ROOT/.usage"
-  date +%s000 > "$ROOT/.usage/.switched"
-}
-
 do_use() {   # the one way an account becomes live; returns 3 if nothing actually moved
   local target=$1 check=1 before after a; shift
   local flags=()
@@ -42,7 +37,6 @@ do_use() {   # the one way an account becomes live; returns 3 if nothing actuall
   after=$(live_email)
   [ "$before" = "$after" ] && return 3
   link_shared_all
-  mark_switch                       # only now: sessions older than this hold the previous login
   [ "$check" = 1 ] && limits --quiet ${flags[@]+"${flags[@]}"}
   return 0
 }

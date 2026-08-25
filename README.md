@@ -101,9 +101,8 @@ only makes noise when there's genuinely nowhere to go.
 
 Parked numbers can be out of date, and rotation leans on them. That mostly self-corrects:
 switching runs a real check on the account it just made live, so if the true numbers come
-back over the threshold, the next `ccex rotate` moves again. The exception is an account
-you left recently — its own sessions may still be spending quota while its parked numbers
-sit frozen, which makes rotating back to it optimistic.
+back over the threshold, the next `ccex rotate` moves again. What it can't see is an
+account being spent from another machine — `--refresh` is what catches that.
 
 ### Leaving it running
 
@@ -133,10 +132,9 @@ keep going when you aren't.
 
 The timer runs with `--no-launch`, so it can't turn into a session launcher every five
 minutes — but it isn't blind either. If nothing has reported for `--refresh` (15 minutes
-by default) it does one real check, then goes quiet again. That matters for accounts
-shared with other people or other machines, whose usage moves without any session of yours
-running: without it, the monitor would happily decide from numbers frozen at whatever they
-were when you last switched.
+by default) it does one real check, then goes quiet again. That covers the case your own
+sessions can't: an account being spent from another machine, or a stretch with no session
+open at all.
 
 ### Where the numbers come from
 
@@ -182,10 +180,10 @@ past. Put it in front of whatever your statusline already is, in `settings.json`
 If you don't have a statusline yet, `"command": "ccex record"` on its own works — it emits
 nothing, and Claude Code shows no statusline, but the recording still happens.
 
-It writes at most once every 15 seconds per account, into
-`~/.claude-profiles/.usage/`, and costs about 7ms on the renders where it does nothing.
-Usage numbers are stamped with the account that produced them and with the time of your
-last switch, so a session that predates a switch can never be misread as the new account.
+It writes at most once every 15 seconds per account, into `~/.claude-profiles/.usage/`,
+and costs about 7ms on the renders where it does nothing. Numbers are filed under the
+account the session is billing at the time it renders, which is why they stay right across
+a switch.
 
 ## Reading `ccex ls`
 
@@ -219,8 +217,10 @@ configuration and history as your main account rather than a blank one.
 Every write first copies the four files it's about to touch into
 `~/.claude-profiles/.backups/<timestamp>/`, so any switch is undoable by hand.
 
-Open Claude Code sessions keep the account they started on — switching affects the next
-session you launch, not the one you're sitting in.
+Sessions you already have open follow the switch. Claude Code re-reads
+`.credentials.json`, so a session started an hour ago bills the account that is live now,
+not the one it started on — which is what makes rotating away from a spent account
+actually help the work you're in the middle of.
 
 ## Caveats
 

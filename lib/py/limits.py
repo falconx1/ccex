@@ -6,7 +6,7 @@ last measured, or from the clock. Only the live account is ever asked directly.
 import datetime, json, os, pty, select, signal, sys, time
 
 from ccexlib import (BASE, cfg_for, creds_for, email_for, hm, is_base,
-                     load, logged_in, slots, snap_path, switched_at)
+                     load, logged_in, slots, snap_path)
 
 argv = sys.argv[1:]
 quiet = "--quiet" in argv
@@ -47,11 +47,8 @@ def live_sessions(d):
             with open("/proc/%s/environ" % pid, "rb") as f:
                 env = dict(e.split(b"=", 1) for e in f.read().split(b"\0") if b"=" in e)
             cd = env.get(b"CLAUDE_CONFIG_DIR", b"").decode("utf8", "replace") or BASE
-            if os.path.realpath(cd) != os.path.realpath(d):
-                continue
-            if os.path.getctime("/proc/" + pid) * 1000 < switched_at():
-                continue      # started before the last switch, so it still holds the old account
-            out.append(int(pid))
+            if os.path.realpath(cd) == os.path.realpath(d):
+                out.append(int(pid))
         except (OSError, ValueError):
             continue
     return out
@@ -66,8 +63,6 @@ def cached(d):
     best = {"fetchedAtMs": c.get("fetchedAtMs") or 0,
             "utilization": c.get("utilization") or {}, "source": "cache"}
     snap = load(snap_path(email_for(d)))
-    if snap.get("startedAtMs", 0) < switched_at():
-        snap = {}
     if (snap.get("fetchedAtMs") or 0) > best["fetchedAtMs"]:
         best = {"fetchedAtMs": snap["fetchedAtMs"], "utilization": snap.get("utilization") or {},
                 "source": "session"}
