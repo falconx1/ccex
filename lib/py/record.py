@@ -32,8 +32,11 @@ try:
                 pid = int(f.read().split(") ", 1)[1].split()[1])
         except (OSError, ValueError, IndexError):
             break
-    if started is None:
-        started = 0        # can't prove which account this session holds; assume it predates a switch
+    if started is None:                          # no /proc: the transcript's age is the best we have
+        try:
+            started = int(os.path.getctime(payload.get("transcript_path") or "") * 1000)
+        except OSError:
+            started = 0
     if started < switched_at():
         raise SystemExit          # older than the last switch: these numbers are the old account's
     os.makedirs(USAGE_DIR, exist_ok=True)

@@ -31,9 +31,18 @@ mark_switch() {   # sessions started before this moment still hold the old accou
   date +%s000 > "$ROOT/.usage/.switched"
 }
 
-do_use() {   # the one way an account becomes live
-  use_acct "$1"
+do_use() {   # the one way an account becomes live; returns 3 if nothing actually moved
+  local target=$1 check=1 before after a; shift
+  local flags=()
+  for a in "$@"; do
+    case "$a" in --no-check) check=0 ;; *) flags+=("$a") ;; esac
+  done
+  before=$(live_email)
+  use_acct "$target"
+  after=$(live_email)
+  [ "$before" = "$after" ] && return 3
   link_shared_all
-  mark_switch
-  if [ "${2:-check}" = check ]; then limits --quiet; fi
+  mark_switch                       # only now: sessions older than this hold the previous login
+  [ "$check" = 1 ] && limits --quiet ${flags[@]+"${flags[@]}"}
+  return 0
 }

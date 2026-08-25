@@ -148,7 +148,10 @@ def reset_at(d, key):
     if not isinstance(v, dict) or v.get("utilization") is None:
         return None, None
     ra = v.get("resets_at")
-    return v["utilization"], datetime.datetime.fromisoformat(ra).timestamp() if ra else None
+    try:
+        return v["utilization"], datetime.datetime.fromisoformat(ra).timestamp() if ra else None
+    except (TypeError, ValueError):
+        return v["utilization"], None
 
 def window(d, key):
     pct, t = reset_at(d, key)
@@ -173,8 +176,9 @@ def compact(d, key):
     return "%d%% - %s" % (pct, hm(left)) if left > 0 else "0% (new)"
 
 def still_counting(d):
-    """True while some window we know about has not yet run out - i.e. old numbers still lie."""
-    return any(t and t > time.time() for _, t in (reset_at(d, k) for k in ("five_hour", "seven_day")))
+    """True while some window we know about has not provably run out - i.e. old numbers still lie."""
+    return any(pct is not None and (t is None or t > time.time())
+               for pct, t in (reset_at(d, k) for k in ("five_hour", "seven_day")))
 
 def age(d):
     c = cached(d)

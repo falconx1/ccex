@@ -5,8 +5,8 @@ monitor() {
   local at=80 every= a
   while [ $# -gt 0 ]; do
     case "$1" in
-      --at)    at=$2; shift 2 ;;
-      --every) every=$2; shift 2 ;;
+      --at)    [ $# -ge 2 ] || die "monitor: --at needs a percentage"; at=$2; shift 2 ;;
+      --every) [ $# -ge 2 ] || die "monitor: --every needs a duration like 5m"; every=$2; shift 2 ;;
       *)       die "monitor: unknown option '$1'" ;;
     esac
   done
@@ -39,8 +39,12 @@ monitor() {
         if ! systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1; then
           out=$(rotate --at "$at" --no-launch 2>&1) || true
         fi
-        IFS=$'\t' read -r name five seven when < <(limits --tsv --no-launch)
+        name= five= seven= when=
+        IFS=$'\t' read -r name five seven when < <(limits --tsv --no-launch) || true
         now=$(live_email)
+        if [ -z "$five" ]; then
+          printf '%-9s %s\n' "$(date +%T)" "limits unavailable"; sleep "$iv"; continue
+        fi
         printf '%-9s %-30s %-15s %-17s %s\n' "$(date +%T)" "$now" "$five" "$seven" "$when"
         [ -n "$last" ] && [ "$last" != "$now" ] && printf '  ^ rotated: %s -> %s\n' "$last" "$now"
         last=$now
@@ -55,8 +59,9 @@ Description=ccex: move off a Claude account that is out of room
 
 [Service]
 Type=oneshot
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=%h/.local/bin/ccex monitor tick --at $at
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin${CC_PROFILE_ROOT:+
+Environment=CC_PROFILE_ROOT=$CC_PROFILE_ROOT}
+ExecStart=$CCEX_BIN monitor tick --at $at
 UNITEOF
       cat > "$UNIT/ccex-rotate.timer" <<UNITEOF
 [Unit]

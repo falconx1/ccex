@@ -7,6 +7,7 @@ set -euo pipefail
 SELF=$(readlink -f "${BASH_SOURCE[0]}")
 CCEX_LIB=${CCEX_LIB:-$(dirname "$SELF")/../lib}
 CCEX_PY="$CCEX_LIB/py"
+export CCEX_BIN="$SELF"
 [ -d "$CCEX_PY" ] || { printf 'ccex: cannot find its lib/ next to %s\n' "$SELF" >&2; exit 1; }
 
 # shellcheck source=../lib/common.sh
@@ -18,7 +19,7 @@ case "$cmd" in
     cur="${CLAUDE_CONFIG_DIR:-$BASE}"
     declare -A FIVE SEVEN WHEN
     while IFS=$'\t' read -r n f s w; do FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; done \
-      < <(limits --all --tsv 2>/dev/null)
+      < <(limits --all --tsv --no-launch)
     printf '%-20s %-30s %-7s %-8s %-12s %-13s %-16s %s\n' \
       ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY CHECKED
     while read -r p; do
@@ -95,7 +96,10 @@ case "$cmd" in
       use_acct "$target" "${flags[@]+"${flags[@]}"}"
       exit 0
     fi
-    do_use "$target" "$([ "$check" = 1 ] && echo check || echo quiet)"
+    rc=0
+    do_use "$target" $([ "$check" = 1 ] || echo --no-check) || rc=$?
+    [ "$rc" = 3 ] && exit 0        # use_acct already said it was live; that is not a failure
+    exit "$rc"
     ;;
   rename)
     [ $# -ge 2 ] || die "usage: ccex rename <old> <new>"

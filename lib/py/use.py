@@ -29,10 +29,10 @@ if t in ("default", "live", "active"):
     sys.exit("ccex: 'default' is whichever account is live; name the account you want")
 hits = [n for n, (d, e) in parked.items() if t in (n.lower(), e.lower())] or \
        [n for n, (d, e) in parked.items() if e.lower().startswith(t) or n.lower().startswith(t)]
-if t in (live_email.lower(), canon(live_email)) or live_email.lower().startswith(t):
-    print("ccex: %s is already live" % (live_email or "that account"))
-    sys.exit(0)
 if not hits:
+    if t in (live_email.lower(), canon(live_email)) or live_email.lower().startswith(t):
+        print("ccex: %s is already live" % (live_email or "that account"))
+        sys.exit(0)
     sys.exit("ccex: no parked account matches '%s' (see: ccex ls)" % target)
 if len(set(hits)) > 1:
     sys.exit("ccex: '%s' matches %s" % (target, ", ".join(sorted(set(hits)))))

@@ -12,6 +12,8 @@ rotate() {
     SWITCH) pick=$a
             printf 'ccex: %s\n' "$b"
             case " $* " in *" -n "*|*" --dry-run "*) printf 'ccex: dry run, nothing written\n'; return 0 ;; esac
-            do_use "$pick" ;;
+            do_use "$pick" $nolaunch || {
+              printf 'ccex: %s did not become live; nothing changed\n' "$pick" >&2; return 1; }
+            ;;
   esac
 }
