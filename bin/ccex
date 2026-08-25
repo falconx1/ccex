@@ -45,36 +45,33 @@ Sessions you already have open follow the switch.
 U
 ;;
     rotate) cat <<'U'
-ccex rotate [--at 80] [-n|--dry-run] [--no-launch] [--max-age <seconds>]
+ccex rotate [--at 80] [-n] [--bg|--watch|--status|--log|--stop]
 
 Switch off the live account if it has crossed --at on the 5-hour or weekly window,
-onto whichever account has the most usable room.
+onto whichever account has the most usable room. With no flag it does that once, now.
 
   --at N        percentage that counts as out of room (default 80)
-  -n            plan only
-  --no-launch   decide from what is already known, never start a session
-  --max-age N   under --no-launch, still check numbers older than N seconds
+  -n            plan only, write nothing
+
+Keep it running:
+
+  --bg          from now on, in the background, on a systemd user timer
+  --watch       in this terminal; 1-6 re-pace it, r checks now, q quits
+  --status      when it last ran, and what it has rotated
+  --log         every switch it has made
+  --stop        remove the timer
+
+  --every 5m    how often (with --bg or --watch)
+  --refresh 15m how stale numbers may get before one real check is worth it
 
 Candidates must be under --at on both windows. Among those, ranking is by what the
 usage costs: used% x (time left in window / window length), 5-hour first, weekly as
-the tie-break. Exits 1 if every account is spent.
-U
-;;
-    monitor) cat <<'U'
-ccex monitor install|watch|status|log|stop [--every 5m] [--at 80] [--refresh 15m]
+the tie-break. Rotating once exits 1 if every account is spent.
 
-  install   systemd user timer that runs `ccex rotate` on a schedule
-  watch     follow it in this terminal; 1-6 re-pace, r checks now, q quits
-  status    when it last ran, and what it has rotated
-  log       every switch it has made
-  stop      disable and remove the timer
-
-  --every     how often to check (install, watch)
-  --at        threshold to rotate at
-  --refresh   how stale numbers may get before one real check is worth it
-
-The timer runs while you are logged in; `loginctl enable-linger $USER` to keep it
-running when you are not.
+Running in the background never starts a session to poll: it decides from what your
+running sessions already report, and only checks for real once nothing has reported
+for --refresh. The timer runs while you are logged in; `loginctl enable-linger $USER`
+to keep it running when you are not.
 U
 ;;
     record) cat <<'U'
@@ -117,7 +114,7 @@ ccex — switch which Claude account Claude Code runs as
   ccex ls [<account>]         every account, or one in full; * marks the live one
   ccex use <account>          make that account live (-n to plan only)
   ccex rotate                 switch off the live account if it is out of room (--at 80)
-  ccex monitor install        keep rotating in the background; also watch|status|log|stop
+  ccex rotate --bg            keep doing that in the background; --watch|--status|--log|--stop
   ccex add <name>             browser login for another account, parked for later
   ccex rm <account>           delete a parked account and its login
   ccex run <account> [args]   run claude as a parked account, leaving the live one alone
@@ -197,10 +194,20 @@ case "$cmd" in
     record
     ;;
   rotate)
-    rotate "$@"
-    ;;
-  monitor)
-    monitor "$@"
+    mode=once; rest=()
+    for a in "$@"; do
+      case "$a" in
+        --bg)     mode=install ;;
+        --watch)  mode=watch ;;
+        --status) mode=status ;;
+        --log)    mode=log ;;
+        --stop)   mode=stop ;;
+        --tick)   mode=tick ;;      # what the timer runs: rotate once, then write the log
+        *)        rest+=("$a") ;;
+      esac
+    done
+    if [ "$mode" = once ]; then rotate ${rest[@]+"${rest[@]}"}
+    else monitor "$mode" ${rest[@]+"${rest[@]}"}; fi
     ;;
   use)
     [ $# -ge 1 ] || die "usage: ccex use <account> [--dry-run] [--no-check]"

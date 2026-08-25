@@ -5,10 +5,10 @@ monitor() {
   local at=80 every= refresh=15m a
   while [ $# -gt 0 ]; do
     case "$1" in
-      --at)    [ $# -ge 2 ] || die "monitor: --at needs a percentage"; at=$2; shift 2 ;;
-      --every) [ $# -ge 2 ] || die "monitor: --every needs a duration like 5m"; every=$2; shift 2 ;;
-      --refresh) [ $# -ge 2 ] || die "monitor: --refresh needs a duration like 15m"; refresh=$2; shift 2 ;;
-      *)       die "monitor: unknown option '$1'" ;;
+      --at)    [ $# -ge 2 ] || die "--at needs a percentage"; at=$2; shift 2 ;;
+      --every) [ $# -ge 2 ] || die "--every needs a duration like 5m"; every=$2; shift 2 ;;
+      --refresh) [ $# -ge 2 ] || die "--refresh needs a duration like 15m"; refresh=$2; shift 2 ;;
+      *)       die "unknown option '$1'" ;;
     esac
   done
   mkdir -p "$ROOT/.usage"
@@ -31,7 +31,7 @@ monitor() {
     watch)
       local iv last='' now line five seven when name out key
       local presets=(10s 30s 1m 5m 15m 30m)
-      iv=$(secs "$every"); [ "$iv" -ge 5 ] 2>/dev/null || die "monitor watch: --every must be at least 5s"
+      iv=$(secs "$every"); [ "$iv" -ge 5 ] 2>/dev/null || die "--every must be at least 5s"
       # A watch you cannot re-pace is a watch you end up killing and restarting.
       wait_key() {
         [ -t 0 ] || { sleep "$iv"; return 0; }      # piped to a file: no keys to read
@@ -57,7 +57,7 @@ monitor() {
       while :; do
         if [ "$(stamp)" != "$stamp" ]; then     # ccex changed on disk; a loop this long-lived should not run stale code
           printf 'ccex: reloading, ccex was updated\n'
-          exec "$CCEX_BIN" monitor watch --every "$every" --at "$at" --refresh "$refresh"
+          exec "$CCEX_BIN" rotate --watch --every "$every" --at "$at" --refresh "$refresh"
         fi
         if ! systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1; then
           out=$(rotate --at "$at" --no-launch --max-age "$(secs "$refresh")" 2>&1) || true
@@ -84,7 +84,7 @@ Description=ccex: move off a Claude account that is out of room
 Type=oneshot
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin${CC_PROFILE_ROOT:+
 Environment=CC_PROFILE_ROOT=$CC_PROFILE_ROOT}
-ExecStart=$CCEX_BIN monitor tick --at $at --refresh $refresh
+ExecStart=$CCEX_BIN rotate --tick --at $at --refresh $refresh
 UNITEOF
       cat > "$UNIT/ccex-rotate.timer" <<UNITEOF
 [Unit]
@@ -110,19 +110,19 @@ UNITEOF
       systemctl --user disable --now ccex-rotate.timer 2>/dev/null || true
       rm -f "$UNIT/ccex-rotate.timer" "$UNIT/ccex-rotate.service"
       systemctl --user daemon-reload
-      printf 'ccex: monitor stopped and removed; `ccex monitor install` puts it back\n'
+      printf 'ccex: background rotation removed; `ccex rotate --bg` puts it back\n'
       ;;
     status)
       if systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1; then
         systemctl --user list-timers ccex-rotate.timer --no-pager | sed -n '1,2p'
       else
-        printf 'ccex: monitor not installed (ccex monitor install)\n'
+        printf 'ccex: not running in the background (ccex rotate --bg)\n'
       fi
       [ -f "$ROOT/.usage/.monitor-last" ] && { printf '\nlast check:\n'; sed 's/^/  /' "$ROOT/.usage/.monitor-last"; }
       [ -s "$ROOT/.usage/rotate.log" ] && { printf '\nrotations:\n'; tail -5 "$ROOT/.usage/rotate.log" | sed 's/^/  /'; }
       return 0
       ;;
     log) [ -s "$ROOT/.usage/rotate.log" ] && cat "$ROOT/.usage/rotate.log" || printf 'ccex: no rotations logged yet\n' ;;
-    *) die "usage: ccex monitor install|watch|status|log|stop" ;;
+    *) die "usage: ccex rotate --bg|--watch|--status|--log|--stop" ;;
   esac
 }

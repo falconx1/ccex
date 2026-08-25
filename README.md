@@ -38,8 +38,8 @@ Needs `bash`, `python3`, and the `claude` CLI on your PATH.
 | `ccex ls` | list accounts; `*` marks the live one |
 | `ccex use <account>` | make that account live (`-n` / `--dry-run` to plan only) |
 | `ccex rotate` | if the live account is running out of room, switch to the one with the most left |
-| `ccex monitor install` | keep rotating in the background, every 5 minutes |
-| `ccex monitor watch` | follow it in this terminal |
+| `ccex rotate --bg` | keep rotating in the background, every 5 minutes |
+| `ccex rotate --watch` | follow it in this terminal |
 | `ccex add <name>` | browser login for another account, parked for later |
 
 `<account>` is a slot name, a full email, or any unambiguous prefix of either — so
@@ -135,10 +135,10 @@ account being spent from another machine — `--refresh` is what catches that.
 ### Leaving it running
 
 ```console
-$ ccex monitor install
-ccex: rotating every 5m at 80%; logs in ~/.claude-profiles/.usage/rotate.log
+$ ccex rotate --bg
+ccex: rotating every 5m at 80%, re-checking anything older than 15m; logs in ~/.claude-profiles/.usage/rotate.log
 
-$ ccex monitor watch
+$ ccex rotate --watch
 ccex: watching every 5m, threshold 80%, rotation by the timer
 TIME      ACCOUNT                        5H              WEEKLY            CHECKED
 10:37:31  ada@example.com                57% - 3h01m     25% - 14h21m      4m ago
@@ -147,14 +147,14 @@ TIME      ACCOUNT                        5H              WEEKLY            CHECK
   ^ rotated: ada@example.com -> ada@acme.example
 ```
 
-`monitor install` writes a systemd user timer (`--every 5m`, `--at 80`, `--refresh 15m`,
-all adjustable) that runs `ccex rotate` and logs any switch it makes. `monitor status` shows when it last
-ran and what it did; `monitor stop` removes it.
+`--bg` writes a systemd user timer (`--every 5m`, `--at 80`, `--refresh 15m`, all
+adjustable) that runs the same rotation and logs any switch it makes. `--status` shows when
+it last ran and what it did, `--log` lists every switch, `--stop` removes the timer.
 
-`monitor watch` prints a line per check in the foreground, and takes keys while it runs:
-`1`–`6` re-pace it (10s, 30s, 1m, 5m, 15m, 30m), `r` checks immediately, `q` quits. If the timer is running, watch
-only reports what the timer does; if it isn't, watch does the rotating itself, so it works
-as a foreground alternative to installing anything. Ctrl-C to stop.
+`--watch` prints a line per check in the foreground, and takes keys while it runs: `1`–`6`
+re-pace it (10s, 30s, 1m, 5m, 15m, 30m), `r` checks immediately, `q` quits. If the timer is
+running, watch only reports what it does; if it isn't, watch does the rotating itself, so
+it works as a foreground alternative to `--bg`.
 
 The timer runs while you're logged in. `loginctl enable-linger $USER` if you want it to
 keep going when you aren't.
