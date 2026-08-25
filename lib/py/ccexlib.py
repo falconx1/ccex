@@ -65,6 +65,53 @@ def snap_path(email):
     return os.path.join(USAGE_DIR, re.sub(r"[^A-Za-z0-9]+", "_", email.lower()) + ".json")
 
 
+IDS = os.path.join(ROOT, ".ids.json")
+
+
+_ids = None
+
+
+def ids():
+    """A small stable integer per account, so `ccex use 2` means the same account tomorrow.
+
+    Numbers are keyed to the email, not to position, so rotating or adding an account
+    never renumbers the others. The lowest free number goes to each new account.
+    """
+    global _ids
+    if _ids is not None:
+        return _ids
+    m = load(IDS)
+    used, new = set(m.values()), False
+    for _, d in slots():
+        e = email_for(d)
+        if e and e not in m:
+            n = 1
+            while n in used:
+                n += 1
+            m[e], new = n, True
+            used.add(n)
+    if new:
+        try:
+            save(IDS, m)                # written once, then reused: a number is not reassigned
+        except OSError:
+            pass
+    _ids = m
+    return m
+
+
+def id_for(d):
+    return ids().get(email_for(d))
+
+
+def expand(target):
+    """Turn a number into the email it stands for; anything else is passed through."""
+    if target.isdigit():
+        for email, n in ids().items():
+            if n == int(target):
+                return email
+    return target
+
+
 def canon(email):
     return re.sub(r"[^a-z0-9]+", "-", email.split("@")[0].lower()).strip("-") or "account"
 

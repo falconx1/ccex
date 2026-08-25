@@ -20,6 +20,7 @@ ccex ls [<account>] [--force]
 
 With no account, every account as one row each:
 
+  #         its number: `ccex use 3` is the whole switch
   ACCOUNT   slot name; * marks the live one
   TOKEN     access token: active, or stale until something uses the account
   REFRESH   when the login itself expires and needs a browser again
@@ -35,8 +36,9 @@ U
     use) cat <<'U'
 ccex use <account> [-n|--dry-run] [--no-check]
 
-Hand the live ~/.claude slot to <account> and park whoever was there. <account> is a
-slot name, a full email, or any unambiguous prefix of either.
+Hand the live ~/.claude slot to <account> and park whoever was there. <account> is the
+number from `ccex ls`, a slot name, a full email, or any unambiguous prefix — `ccex use 3`
+is the quickest.
 
   -n, --dry-run   say what would move, write nothing
   --no-check      skip the limits report afterwards
@@ -123,7 +125,8 @@ ccex — switch which Claude account Claude Code runs as
 
   ccex <command> -h           what that command does, and its flags
 
-<account> is a slot name, a full email, or any unambiguous prefix of either.
+<account> is the number from `ccex ls`, a slot name, a full email, or any unambiguous
+prefix of either. Numbers are keyed to the account, so they survive rotations.
 
 The live account is the ordinary ~/.claude; the rest are parked under ~/.claude-profiles
 with settings, history and plugins symlinked back, so a switch changes nothing but who is
@@ -153,19 +156,19 @@ case "$cmd" in
     if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then limits --quiet "$@"; exit 0; fi
     cur="${CLAUDE_CONFIG_DIR:-$BASE}"
     how=--no-launch; case " $* " in *" --force "*) how=--force ;; esac
-    declare -A FIVE SEVEN WHEN
-    while IFS=$'\t' read -r n f s w; do FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; done \
+    declare -A ID FIVE SEVEN WHEN
+    while IFS=$'\t' read -r n i f s w; do ID[$n]=$i; FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; done \
       < <(limits --all --tsv "$how")
-    printf '%-20s %-30s %-7s %-7s %-8s %-22s %-26s %s\n' \
-      ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY CHECKED
+    printf '%-3s %-20s %-30s %-7s %-7s %-8s %-22s %-26s %s\n' \
+      '#' ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY CHECKED
     while read -r p; do
       d=$(dir_for "$p")
       mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
       IFS=$'\t' read -r email tier state rstate < <(info "$d")
-      printf '%s%-19s %-30s %-7s %-7s %-8s %s %s %s\n' \
-        "$mark" "$p" "$email" "$tier" "$state" "$rstate" \
+      printf '%-3s %s%-19s %-30s %-7s %-7s %-8s %s %s %s\n' \
+        "${ID[$p]:--}" "$mark" "$p" "$email" "$tier" "$state" "$rstate" \
         "${FIVE[$p]:--}" "${SEVEN[$p]:--}" "${WHEN[$p]:--}"
-    done < <(profiles)
+    done < <(profiles) | sort -n        # by id, so the numbers you type read in order
     ;;
   add)
     [ $# -ge 1 ] || die "usage: ccex add <name> [--email you@example.com]"

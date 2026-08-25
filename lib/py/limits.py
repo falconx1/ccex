@@ -5,7 +5,7 @@ last measured, or from the clock. Only the live account is ever asked directly.
 """
 import datetime, json, os, pty, select, signal, sys, time
 
-from ccexlib import (BASE, cfg_for, creds_for, email_for, hm, is_base,
+from ccexlib import (BASE, cfg_for, creds_for, email_for, expand, hm, id_for, is_base,
                      load, logged_in, slots, snap_path)
 
 argv = sys.argv[1:]
@@ -221,7 +221,7 @@ if every:
 elif not args:
     targets = [("default", BASE)]
 else:
-    for t in [a.lower() for a in args]:
+    for t in [expand(a).lower() for a in args]:
         hit = [(n, d) for n, d in slots() if t in (n.lower(), email_for(d).lower())] or \
               [(n, d) for n, d in slots() if n.lower().startswith(t) or email_for(d).lower().startswith(t)]
         if not hit:
@@ -278,7 +278,8 @@ if js:
     print(json.dumps(out))
 elif tsv:
     for name, d in targets:
-        print("\t".join([name, compact(d, "five_hour").ljust(22), compact(d, "seven_day").ljust(26),
+        print("\t".join([name, str(id_for(d) or "-"),
+                         compact(d, "five_hour").ljust(22), compact(d, "seven_day").ljust(26),
                          "live" if cached(d)["source"] == "session" and live_sessions(d) else age(d)]))
 elif quiet and len(rows) == 1:
     name, email, five, seven, a = rows[0]

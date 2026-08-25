@@ -1,9 +1,9 @@
 """Hand the live ~/.claude slot over to a parked account, and park the one that was there."""
 import os, shutil, sys, time
 
-from ccexlib import BASE, ROOT, canon, cfg_for, creds_for, email_for, load, logged_in, save
+from ccexlib import BASE, ROOT, canon, cfg_for, creds_for, email_for, expand, load, logged_in, save
 
-target = sys.argv[1]
+target = expand(sys.argv[1])
 dry = "--dry-run" in sys.argv[2:] or "-n" in sys.argv[2:]
 
 def slot(d):

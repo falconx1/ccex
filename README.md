@@ -8,10 +8,13 @@ tokens stay exactly where they are.
 
 ```console
 $ ccex ls
-ACCOUNT        EMAIL                    TIER    TOKEN   REFRESH  5H                     WEEKLY                     CHECKED
-*default       ada@example.com          max_5x  active  20-09    ████░░░░░░   41% 3h21m ██░░░░░░░░   23% 14h41m   live
- personal      ada.lovelace@gmail.com   pro     stale   21-09    ░░░░░░░░░░    4% 1h41m ██░░░░░░░░   18% 18h41m   8m ago
- client-acme   ada@acme.example         max_5x  active  22-09    █░░░░░░░░░    9% 2h51m ████░░░░░░   36% 4d 8h41m  4m ago
+#   ACCOUNT        EMAIL                    TIER    TOKEN   REFRESH  5H                     WEEKLY                     CHECKED
+1   *default       ada@example.com          max_5x  active  20-09    ████░░░░░░   41% 3h21m ██░░░░░░░░   23% 14h41m   live
+2    personal      ada.lovelace@gmail.com   pro     stale   21-09    ░░░░░░░░░░    4% 1h41m ██░░░░░░░░   18% 18h41m   8m ago
+3    client-acme   ada@acme.example         max_5x  active  22-09    █░░░░░░░░░    9% 2h51m ████░░░░░░   36% 4d 8h41m  4m ago
+
+$ ccex use 3
+ccex: ada@example.com -> parked as 'ada'; ada@acme.example -> live
 
 $ ccex use client-acme
 ccex: ada@example.com -> parked as 'ada'; ada@acme.example -> live
@@ -42,8 +45,13 @@ Needs `bash`, `python3`, and the `claude` CLI on your PATH.
 | `ccex rotate --watch` | follow it in this terminal |
 | `ccex add <name>` | browser login for another account, parked for later |
 
-`<account>` is a slot name, a full email, or any unambiguous prefix of either — so
-`ccex use acme`, `ccex use client-acme` and `ccex use ada@acme.example` are the same thing.
+`<account>` is the number from the `#` column, a slot name, a full email, or any
+unambiguous prefix of either — so `ccex use 3`, `ccex use acme`, `ccex use client-acme` and
+`ccex use ada@acme.example` all mean the same account.
+
+Those numbers are stored in `~/.claude-profiles/.ids.json`, keyed by email rather than by
+position, so they don't move when you rotate, add or remove an account. An account keeps
+its number for as long as it exists, and a new one takes the lowest free number.
 
 ## Occasional
 
