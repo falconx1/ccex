@@ -11,7 +11,7 @@ export CCEX_BIN="$SELF"
 [ -d "$CCEX_PY" ] || { printf 'ccex: cannot find its lib/ next to %s\n' "$SELF" >&2; exit 1; }
 
 # shellcheck source=../lib/common.sh
-for m in common profile limits rotate monitor; do . "$CCEX_LIB/$m.sh"; done
+for m in common profile limits rotate background; do . "$CCEX_LIB/$m.sh"; done
 
 usage() {   # `ccex -h` for the overview, `ccex <command> -h` for one command
   case "${1:-}" in
@@ -211,18 +211,18 @@ case "$cmd" in
     ;;
   use)
     [ $# -ge 1 ] || die "usage: ccex use <account> [--dry-run] [--no-check]"
-    check=1; dry=0; target=''; flags=()
+    check=1; dry=0; target=
     for a in "$@"; do
       case "$a" in
         --no-check)     check=0 ;;
-        -n|--dry-run)   dry=1; flags+=("$a") ;;
-        -*)             flags+=("$a") ;;
+        -n|--dry-run)   dry=1 ;;
+        -*)             die "use: unknown option '$a' (try: ccex use -h)" ;;
         *)              [ -n "$target" ] && die "use takes one account, got '$target' and '$a'"; target=$a ;;
       esac
     done
     [ -n "$target" ] || die "usage: ccex use <account> [--dry-run] [--no-check]"
     if [ "$dry" = 1 ]; then
-      use_acct "$target" "${flags[@]+"${flags[@]}"}"
+      use_acct "$target" --dry-run
       exit 0
     fi
     rc=0

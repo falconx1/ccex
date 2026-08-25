@@ -1,7 +1,7 @@
 """Hand the live ~/.claude slot over to a parked account, and park the one that was there."""
 import os, shutil, sys, time
 
-from ccexlib import BASE, ROOT, canon, cfg_for, creds_for, email_for, load, save
+from ccexlib import BASE, ROOT, canon, cfg_for, creds_for, email_for, load, logged_in, save
 
 target = sys.argv[1]
 dry = "--dry-run" in sys.argv[2:] or "-n" in sys.argv[2:]
@@ -39,11 +39,18 @@ if len(set(hits)) > 1:
 
 src_name = hits[0]
 src_dir, src_email = parked[src_name]
-park_name = canon(live_email) if live_email else "previous"
+def taken(d):
+    """Someone else's login is in here, and overwriting it would need a fresh browser sign-in."""
+    if os.path.realpath(d) == os.path.realpath(src_dir):
+        return True
+    return logged_in(d) and email_for(d).lower() != (live_email or "").lower()
+
+base_name = canon(live_email) if live_email else "previous"
+park_name, n = base_name, 1
+while taken(os.path.join(ROOT, park_name)):
+    n += 1
+    park_name = "%s-%d" % (base_name, n)
 park_dir = os.path.join(ROOT, park_name)
-if os.path.realpath(park_dir) == os.path.realpath(src_dir):
-    park_name += "-" + time.strftime("%H%M%S")
-    park_dir = os.path.join(ROOT, park_name)
 
 print("ccex: %s -> parked as '%s'; %s -> live" % (live_email or "current", park_name, src_email))
 if dry:

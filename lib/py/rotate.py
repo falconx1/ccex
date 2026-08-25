@@ -27,8 +27,9 @@ why = "%s is at %d%% 5h / %d%% weekly (%s over %d%%)" % (
     live["email"], live["five"], live["seven"], " and ".join(tripped), at)
 
 if not room:
-    soon = [(a[k], a["name"]) for a in accounts for k in ("five_resets", "seven_resets")
-            if a.get(k) and a[k] > time.time()]
+    soon = [(a[k], a["name"]) for a in others for k, w in
+            (("five_resets", "five"), ("seven_resets", "seven"))
+            if a.get(k) and a[k] > time.time() and a.get(w) is not None and a[w] >= at]
     tail = ""
     if soon:
         t, n = min(soon)

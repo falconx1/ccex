@@ -19,12 +19,16 @@ nolaunch = "--no-launch" in argv
 max_age, args, skip = None, [], False
 for i, a in enumerate(argv):
     if skip:
+        if not a.isdigit():
+            sys.exit("ccex: --max-age wants a number of seconds, got '%s'" % a)
         max_age = int(a)
         skip = False
     elif a == "--max-age":     # numbers older than this are worth a real check even under --no-launch
         skip = True
     elif not a.startswith("-"):
         args.append(a)
+if skip:
+    sys.exit("ccex: --max-age wants a number of seconds")
 
 
 
@@ -240,11 +244,11 @@ for name, d in targets:
         st = "ok"                      # every window it knew about has since reset, so 0% is certain
     elif not is_base(d):
         st = "parked"                  # not the account you are running; leave it alone until it is
-    elif force or too_old:
+    elif live_sessions(d) and not force:
+        st = "unhooked"                # never start a second session behind a running one
+    elif too_old:
         st = probe(d)                  # nothing is reporting and the numbers have aged out
-    elif live_sessions(d):
-        st = "unhooked"                # don't start a second session behind a running one
-    elif nolaunch:
+    elif nolaunch and not force:
         st = "ok"                      # caller would rather have old numbers than a new session
     else:
         st = probe(d)                  # last resort: open the TUI just long enough to read /usage
@@ -282,9 +286,9 @@ elif quiet and len(rows) == 1:
     print("        5h      %s" % five)
     print("        weekly  %s" % seven)
 else:
-    print("%-20s %-30s %-22s %-26s %s" % ("ACCOUNT", "EMAIL", "5-HOUR", "WEEKLY", "CHECKED"))
+    print("%-20s %-30s %-44s %-48s %s" % ("ACCOUNT", "EMAIL", "5-HOUR", "WEEKLY", "CHECKED"))
     for name, email, five, seven, a in rows:
         mark = "*" if name == "default" else " "
-        print("%s%-19s %-30s %-22s %-26s %s" % (mark, name, email, five, seven, a))
+        print("%s%-19s %-30s %-44s %-48s %s" % (mark, name, email, five, seven, a))
 for n in notes:
     print(n, file=sys.stderr)

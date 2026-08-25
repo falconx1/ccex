@@ -193,9 +193,9 @@ Nothing is launched for an account whose windows have all expired, parked or liv
 answer is already 0%, and it stays 0% until a session reports otherwise. Parked accounts
 are never launched at all — their numbers sit at whatever they were when that account was
 last live, ticking down as their windows expire, and get a real check the moment you
-`ccex use` them. If a session is already open on the live account but you
-haven't installed the recorder, `ccex` shows slightly old numbers rather than starting a
-second session behind your back.
+`ccex use` them. If a session is already open on the live account but you haven't installed the recorder,
+`ccex` shows slightly old numbers rather than starting a second session behind your back —
+that holds even past `--refresh`, so the promise has no exception.
 
 ### Live numbers from your statusline
 
@@ -275,7 +275,7 @@ lib/common.sh     where the accounts live, plus die / dir_for / profiles / py
 lib/profile.sh    symlinking a profile to your real config, and making an account live
 lib/limits.sh     the limits command, and the statusline recorder's throttle
 lib/rotate.sh     turning a decision into a switch
-lib/monitor.sh    the systemd timer and the foreground watch
+lib/background.sh the systemd timer and the foreground watch
 lib/py/ccexlib.py paths, JSON read/write, slot enumeration -- imported by all of the below
 lib/py/use.py     the credential handover, the one place accounts move
 lib/py/limits.py  the usage engine: session, cache, clock, and the pty probe

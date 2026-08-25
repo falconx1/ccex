@@ -13,6 +13,7 @@ monitor() {
   done
   mkdir -p "$ROOT/.usage"
   [ -n "$every" ] || every=5m
+  secs "$every" >/dev/null; secs "$refresh" >/dev/null    # fail here, not on every tick
   case "$sub" in
     tick)
       local before after out rc ts
@@ -59,8 +60,13 @@ monitor() {
           printf 'ccex: reloading, ccex was updated\n'
           exec "$CCEX_BIN" rotate --watch --every "$every" --at "$at" --refresh "$refresh"
         fi
+        out=
         if ! systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1; then
           out=$(rotate --at "$at" --no-launch --max-age "$(secs "$refresh")" 2>&1) || true
+          case "$out" in
+            *"staying put"*) out= ;;                 # the boring case; the row below says it
+            *) printf '%s\n' "$out" ;;              # nowhere to go, or something broke
+          esac
         fi
         name= five= seven= when=
         IFS=$'\t' read -r name five seven when < <(limits --tsv --no-launch --max-age "$(secs "$refresh")") || true
@@ -75,6 +81,8 @@ monitor() {
       done
       ;;
     install)
+      local claude_dir=
+      claude_dir=$(command -v claude 2>/dev/null) && claude_dir="$(dirname "$claude_dir"):" || claude_dir=
       mkdir -p "$UNIT"
       cat > "$UNIT/ccex-rotate.service" <<UNITEOF
 [Unit]
@@ -82,7 +90,7 @@ Description=ccex: move off a Claude account that is out of room
 
 [Service]
 Type=oneshot
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin${CC_PROFILE_ROOT:+
+Environment=PATH=$claude_dir%h/.local/bin:/usr/local/bin:/usr/bin:/bin${CC_PROFILE_ROOT:+
 Environment=CC_PROFILE_ROOT=$CC_PROFILE_ROOT}
 ExecStart=$CCEX_BIN rotate --tick --at $at --refresh $refresh
 UNITEOF
