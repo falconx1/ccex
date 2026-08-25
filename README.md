@@ -344,7 +344,7 @@ actually help the work you're in the middle of.
 ./test/run.sh
 ```
 
-43 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
+45 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
 switching by name and number, exit codes, the pool, rotation decisions, the statusline
 install, help for every command, and that parking never overwrites another account's
 login. No network, no `claude`

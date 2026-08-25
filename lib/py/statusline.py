@@ -9,8 +9,8 @@ import json, os, shutil, sys, time
 from ccexlib import BASE, ROOT, load, save
 
 CCEX = os.environ.get("CCEX_BIN") or "ccex"
-SHARE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "share")
-BAR = os.path.join(SHARE, "statusline.sh")
+HERE = os.path.abspath(__file__)                      # <checkout>/lib/py/statusline.py
+BAR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(HERE))), "share", "statusline.sh")
 RECORD = "%s record" % CCEX
 
 settings = os.path.join(BASE, "settings.json")
@@ -31,6 +31,8 @@ if existing:
     command = "%s | %s" % (RECORD, existing)
     what = "kept your statusline, recording in front of it"
 else:
+    if not os.access(BAR, os.X_OK):    # never write a statusLine that points at nothing
+        sys.exit("ccex: cannot find the bundled statusline at %s" % BAR)
     command = "%s | %s" % (RECORD, BAR)
     what = "installed the bundled statusline"
 

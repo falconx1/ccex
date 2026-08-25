@@ -117,7 +117,19 @@ echo "statusline install"
 teardown; setup
 t  "install wires the recorder"  "statusLine ="            "$CCEX" record --install
 t  "settings.json has the pipe"  "record | "               cat "$HOME/.claude/settings.json"
-t  "the bundled bar is the target" "share/statusline.sh"   cat "$HOME/.claude/settings.json"
+installed_cmd() {   # the statusLine command as Claude Code would run it
+  python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["statusLine"]["command"])' \
+    "$HOME/.claude/settings.json"
+}
+target_runs() {     # a statusLine pointing at a file that is not there is the bug this catches
+  local bar; bar=${1#*| }
+  [ -x "$bar" ] && echo ok || echo "not executable: $bar"
+}
+renders() { printf '{"rate_limits":{"five_hour":{"used_percentage":62}}}' | eval "$1"; }
+cmd=$(installed_cmd)
+t  "the bundled bar is the target" "/share/statusline.sh"  echo "$cmd"
+t  "and that path really exists"  "ok"                     target_runs "$cmd"
+t  "the whole pipeline renders"   "5h:"                    renders "$cmd"
 t  "installing twice is a no-op" "already recording"       "$CCEX" record --install
 python3 - "$HOME" <<'PY2'
 import json, sys                       # a statusline of your own must survive the install
