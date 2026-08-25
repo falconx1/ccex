@@ -22,6 +22,11 @@ try:
                    "resets_at": datetime.datetime.fromtimestamp(ra, datetime.timezone.utc).isoformat() if ra else None}
     os.makedirs(USAGE_DIR, exist_ok=True)
     out = snap_path(email)
+    try:                          # a payload missing a window must not erase what we had
+        with open(out) as f:
+            util = {**(json.load(f).get("utilization") or {}), **util}
+    except (OSError, ValueError):
+        pass
     tmp = out + ".tmp.%d" % os.getpid()
     with open(tmp, "w") as f:
         json.dump({"email": email, "fetchedAtMs": int(time.time() * 1000), "utilization": util,

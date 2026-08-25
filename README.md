@@ -178,10 +178,10 @@ open at all.
 `ccex` will not spend your quota to tell you about your quota, and it will not start a
 session on an account you aren't using. It takes the first answer it can get:
 
-1. **The clock.** A window whose reset time has passed is 0% used — that follows from
-   arithmetic, not from asking anyone, and it holds for the account you're running just as
-   much as for the ones you aren't. Such a window shows as `0% (new)`, to distinguish a
-   window that reset from one that was measured at zero.
+1. **The clock.** A window whose reset time has passed — or is inside its last minute — is
+   0% used. That follows from arithmetic, not from asking anyone, and it holds for the
+   account you're running just as much as for the ones you aren't. Such a window reads
+   `0% new`, to distinguish a window that reset from one that was measured at zero.
 2. **A session you already have open.** Claude Code hands its statusline a `rate_limits`
    block on every render. Route that through `ccex record` (below) and any running session
    keeps its own account's numbers current for free.

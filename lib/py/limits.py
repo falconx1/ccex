@@ -59,18 +59,31 @@ def live_sessions(d):
 
 
 def cached(d):
-    """Freshest limits we have: a running session's statusline beats the on-disk cache."""
+    """Freshest limits we have, window by window.
+
+    A running session's statusline beats the on-disk cache, but it does not always carry
+    both windows -- Claude Code omits one that has just rolled over. Taking the freshest
+    source wholesale would then lose that window entirely, so each is chosen separately.
+    """
     cfg = load(cfg_for(d))
     c = cfg.get("cachedUsageUtilization") or {}
     if c.get("accountUuid") and c["accountUuid"] != (cfg.get("oauthAccount") or {}).get("accountUuid"):
         c = {}                     # left behind by whoever held this slot before
-    best = {"fetchedAtMs": c.get("fetchedAtMs") or 0,
-            "utilization": c.get("utilization") or {}, "source": "cache"}
     snap = load(snap_path(email_for(d)))
-    if (snap.get("fetchedAtMs") or 0) > best["fetchedAtMs"]:
-        best = {"fetchedAtMs": snap["fetchedAtMs"], "utilization": snap.get("utilization") or {},
-                "source": "session"}
-    return best
+    sources = [(snap.get("fetchedAtMs") or 0, snap.get("utilization") or {}, "session"),
+               (c.get("fetchedAtMs") or 0, c.get("utilization") or {}, "cache")]
+    sources.sort(key=lambda x: -x[0])
+
+    util, newest, source = {}, 0, "cache"
+    for key in ("five_hour", "seven_day"):
+        for ms, u, name in sources:
+            v = u.get(key)
+            if isinstance(v, dict) and v.get("utilization") is not None:
+                util[key] = v
+                if ms > newest:
+                    newest, source = ms, name
+                break
+    return {"fetchedAtMs": newest, "utilization": util, "source": source}
 
 
 def trusted_dir(cfg):
@@ -170,11 +183,12 @@ def window(d, key):
     left = t - time.time()
     when = time.strftime("%H:%M" if time.strftime("%d-%m") == time.strftime("%d-%m", time.localtime(t))
                          else "%d-%m %H:%M", time.localtime(t))
-    if left <= 0:
+    if left <= GRACE:
         return "%s    0%% used - window reset at %s, nothing measured since" % (bar(0), when)
     return "%s %4d%% used, resets %s (%s)" % (bar(pct), pct, when, hm(left))
 
 WINDOW = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
+GRACE = 60          # a window inside its last minute has effectively already rolled over
 
 
 def bar(pct, width=10):
@@ -190,13 +204,13 @@ def compact(d, key):
     if t is None:
         return "%d%%" % pct
     left = t - time.time()
-    if left <= 0:
+    if left <= GRACE:
         return "%s    0%% new" % bar(0)
     return "%s %4d%% %s" % (bar(pct), pct, hm(left))
 
 def still_counting(d):
     """True while some window we know about has not provably run out - i.e. old numbers still lie."""
-    return any(pct is not None and (t is None or t > time.time())
+    return any(pct is not None and (t is None or t - time.time() > GRACE)
                for pct, t in (reset_at(d, k) for k in ("five_hour", "seven_day")))
 
 def age(d):
@@ -262,7 +276,7 @@ if js:
         pct, t = reset_at(d, key)
         if pct is None:
             return None, None, False
-        if t and t <= time.time():
+        if t and t - time.time() <= GRACE:
             return 0, t, True          # window rolled over: zero, and we know it without asking
         return pct, t, False
     out = []
