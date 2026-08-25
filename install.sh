@@ -15,3 +15,6 @@ case ":$PATH:" in
 esac
 command -v python3 >/dev/null || printf 'ccex: needs python3\n' >&2
 command -v claude   >/dev/null || printf 'ccex: needs the claude CLI\n' >&2
+
+# One more step, and only once: it costs nothing and keeps every limit reading current.
+printf 'ccex: run `ccex record --install` to read your limits from your statusline for free\n'

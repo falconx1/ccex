@@ -113,6 +113,23 @@ PY
 "$CCEX" use bee --no-check >/dev/null 2>&1
 t  "the other login survives"    "KEEP-R"  cat "$HOME/.claude-profiles/a/.credentials.json"
 
+echo "statusline install"
+teardown; setup
+t  "install wires the recorder"  "statusLine ="            "$CCEX" record --install
+t  "settings.json has the pipe"  "record | "               cat "$HOME/.claude/settings.json"
+t  "the bundled bar is the target" "share/statusline.sh"   cat "$HOME/.claude/settings.json"
+t  "installing twice is a no-op" "already recording"       "$CCEX" record --install
+python3 - "$HOME" <<'PY2'
+import json, sys                       # a statusline of your own must survive the install
+h = sys.argv[1]
+json.dump({"statusLine": {"type": "command", "command": "my-own-bar"}},
+          open(h + "/.claude/settings.json", "w"))
+PY2
+t  "your own statusline is kept"  "kept your statusline"    "$CCEX" record --install
+t  "and it pipes into it"        "record | my-own-bar"     cat "$HOME/.claude/settings.json"
+t  "settings.json is backed up"  "settings.json"           find "$HOME/.claude-profiles/.backups/" -name settings.json
+t  "a bad flag does not hang"    "unknown option"          "$CCEX" record --instal
+
 echo "help"
 for c in ls use rotate pool add run env record; do
   t "ccex $c -h" "ccex $c" "$CCEX" "$c" -h

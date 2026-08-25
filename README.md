@@ -32,6 +32,17 @@ That symlinks `~/.local/bin/ccex` to the checkout, so `git pull` is the whole up
 story. Pass a different directory to install elsewhere: `install.sh ~/bin`. Keep the
 checkout where it is — the symlink and the systemd unit both point at it.
 
+Then, once:
+
+```sh
+ccex record --install
+```
+
+That puts `ccex record` in front of your statusline in `settings.json`, which is what keeps
+every usage number current without ever starting a session to ask. It keeps the statusline
+you already have and pipes into it; if you don't have one, it installs the bundled bar.
+[More below.](#live-numbers-from-your-statusline)
+
 Needs `bash`, `python3`, and the `claude` CLI on your PATH.
 
 ## Everyday
@@ -62,7 +73,8 @@ until you `ccex rm` it, which releases the number for the next account to take.
 | `ccex env <account>` | `eval "$(ccex env work)"` to set `CLAUDE_CONFIG_DIR` in your shell |
 | `ccex pool out \| in <account>` | take an account out of the rotation pool, or put it back |
 | `ccex rm <account>` | delete a parked slot and its credential |
-| `ccex record` | statusline filter — see below |
+| `ccex record` | the statusline filter that keeps limits current — see below |
+| `ccex record --install` | wire it into your statusline, once |
 
 Run `ccex <command> -h` for that command's flags. To re-authenticate an account whose
 login has expired, `ccex add` it again under the same name.
@@ -232,14 +244,35 @@ that holds even past `--refresh`, so the promise has no exception.
 ### Live numbers from your statusline
 
 `ccex record` is a filter: statusline JSON in, the same JSON out, limits noted on the way
-past. Put it in front of whatever your statusline already is, in `settings.json`:
+past. One command wires it in:
+
+```console
+$ ccex record --install
+ccex: backed up settings.json to ~/.claude-profiles/.backups/20260825-121904
+ccex: kept your statusline, recording in front of it
+ccex: statusLine = ~/src/ccex/bin/ccex record | ~/.claude/statusline-command.sh
+ccex: open a new session, or /statusline to reload; live limits from now on
+```
+
+Whatever statusline you already have becomes the pipe target, so the only thing that
+changes is that the numbers stay current. With no statusline of your own, it installs the
+bundled one — model, context, cost, and both usage windows as bars, in the same colours
+`ccex ls` uses:
+
+```
+Opus 5 │ ctx:███░░░░░░░ 37% │ $1.23 │ 5h:██████░░░░ 62% │ 7d:█░░░░░░░░░ 18%
+```
+
+It is a one-time install: `settings.json` is backed up first, running it again changes
+nothing, and the line that undoes it is printed. The hand-written equivalent is one key in
+`settings.json`, if you would rather:
 
 ```json
 "statusLine": { "type": "command", "command": "ccex record | ~/.claude/statusline-command.sh" }
 ```
 
-If you don't have a statusline yet, `"command": "ccex record"` on its own works — it emits
-nothing, and Claude Code shows no statusline, but the recording still happens.
+`"command": "ccex record"` on its own works too — it emits nothing, so Claude Code shows no
+statusline, but the recording still happens.
 
 It writes at most once every 15 seconds per account, into `~/.claude-profiles/.usage/`,
 and costs about 7ms on the renders where it does nothing. Numbers are filed under the
@@ -311,30 +344,33 @@ actually help the work you're in the middle of.
 ./test/run.sh
 ```
 
-35 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
-switching by name and number, exit codes, the pool, rotation decisions, help for every
-command, and that parking never overwrites another account's login. No network, no `claude`
+43 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
+switching by name and number, exit codes, the pool, rotation decisions, the statusline
+install, help for every command, and that parking never overwrites another account's
+login. No network, no `claude`
 binary, nothing written outside a temp directory.
 
 ## Layout
 
 ```
-bin/ccex          argument dispatch and the help text, nothing else
-lib/common.sh     where the accounts live, plus die / dir_for / profiles / py
-lib/profile.sh    symlinking a profile to your real config, and making an account live
-lib/limits.sh     the limits command, and the statusline recorder's throttle
-lib/rotate.sh     turning a decision into a switch
-lib/background.sh the systemd timer and the foreground watch
-lib/py/ccexlib.py paths, JSON read/write, slots, numbers, the pool -- imported by the rest
-lib/py/use.py     the credential handover, the one place accounts move
-lib/py/limits.py  the usage engine: session, cache, clock, and the pty probe
-lib/py/rotate.py  which account to move to, and why
-lib/py/record.py  statusline payload in, limits snapshot out
-lib/py/info.py    one `ccex ls` row
-lib/py/seed.py    onboarding and trust for a fresh profile
-lib/py/pool.py    holding an account out of rotation, and putting it back
-lib/py/forget.py  releasing a number when an account is removed
-test/run.sh       the suite above
+bin/ccex              argument dispatch and the help text, nothing else
+lib/common.sh         where the accounts live, plus die / dir_for / profiles / py
+lib/profile.sh        symlinking a profile to your real config, and making an account live
+lib/limits.sh         the limits command, and the statusline recorder's throttle
+lib/rotate.sh         turning a decision into a switch
+lib/background.sh     the systemd timer and the foreground watch
+lib/py/ccexlib.py     paths, JSON read/write, slots, numbers, the pool -- imported by the rest
+lib/py/use.py         the credential handover, the one place accounts move
+lib/py/limits.py      the usage engine: session, cache, clock, and the pty probe
+lib/py/rotate.py      which account to move to, and why
+lib/py/record.py      statusline payload in, limits snapshot out
+lib/py/statusline.py  the one-time statusLine edit in settings.json
+lib/py/info.py        one `ccex ls` row
+lib/py/seed.py        onboarding and trust for a fresh profile
+lib/py/pool.py        holding an account out of rotation, and putting it back
+lib/py/forget.py      releasing a number when an account is removed
+share/statusline.sh   the bundled statusline, installed when you have none
+test/run.sh           the suite above
 ```
 
 Each bash module is sourced by `bin/ccex`; each python module is run by the `py` helper

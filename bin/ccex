@@ -77,15 +77,21 @@ to keep it running when you are not.
 U
 ;;
     record) cat <<'U'
-ccex record
+ccex record [--install]
 
 A statusline filter: Claude Code's payload in, the same payload out, the limits in it
-noted on the way past. Put it in front of your statusline in settings.json:
+noted on the way past. Every running session then keeps its own account's numbers
+current, and nothing has to be launched to read them. Writes at most once every 15
+seconds per account.
+
+  --install   put it in front of your statusline in settings.json, once
+
+Installing keeps whatever statusline you already have and pipes into it; with no
+statusline it installs the bundled bar — model, context, cost, both usage windows.
+settings.json is backed up first, and the line that undoes it is printed. Running it
+again changes nothing. Without --install, this is the filter itself:
 
   "statusLine": { "type": "command", "command": "ccex record | your-statusline" }
-
-Every running session then keeps its own account's numbers current, and nothing has
-to be launched to read them. Writes at most once every 15 seconds per account.
 U
 ;;
     pool) cat <<'U'
@@ -133,6 +139,7 @@ ccex — switch which Claude account Claude Code runs as
   ccex run <account> [args]   run claude as a parked account, leaving the live one alone
   ccex env <account>          eval "$(ccex env work)" to set CLAUDE_CONFIG_DIR
   ccex record                 statusline filter that keeps limits current for free
+  ccex record --install       wire that filter into your statusline, once
 
   ccex <command> -h           what that command does, and its flags
 
@@ -146,8 +153,8 @@ what it touches to ~/.claude-profiles/.backups/<timestamp>/. Sessions you alread
 open follow the switch: they re-read the credential and bill the new account from their
 next request on.
 
-For live usage numbers at no cost, put `ccex record |` in front of your statusLine command
-in settings.json — see `ccex record -h`.
+For live usage numbers at no cost, `ccex record --install` puts `ccex record |` in front of
+your statusLine command in settings.json — see `ccex record -h`.
 USAGE
 ;;
   esac
@@ -207,7 +214,11 @@ case "$cmd" in
     else printf 'export CLAUDE_CONFIG_DIR=%q\n' "$d"; fi
     ;;
   record)
-    record
+    case "${1:-}" in                     # --install must be handled before record() reads stdin
+      --install) py statusline ;;
+      '')        record ;;
+      *)         die "record: unknown option '$1' (try: ccex record -h)" ;;
+    esac
     ;;
   pool)
     case "${1:-}" in
