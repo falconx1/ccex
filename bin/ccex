@@ -48,8 +48,14 @@ it needs a few minutes of readings before it can say.
                 default, and never while the background daemon is doing it)
   --rotate      switch here, not just report it, when the live account is out of room
 
-  0-9  type an account's number to switch to it, y to confirm (backspace edits)
-  +/-  re-pace it (10s, 30s, 1m, 5m, 15m, 30m)   r  re-read now    q  quit
+  up/down  move the selection, enter switches to it
+  0-9      or type an account's number, y to confirm (backspace edits)
+  +/-      re-pace it (10s, 30s, 1m, 5m, 15m, 30m)   r  re-read now    q  quit
+
+Each row is one account by email, then each window as a percentage, a bar with a tick
+where that account counts as out of room, and how long until it resets. `▶` marks the
+account you are billing, `›` the one the arrows are on, and ROTATION says whether
+rotation may choose it -- in pool, held, retired, or its own cap.
 
 The estimate is about the 5-hour window, which is what actually stops you working; the
 week only joins it once it is past 90%. Both read the same per-account caps rotation

@@ -105,16 +105,16 @@ $ ccex ls -w
 ```
 
 ```
- ccex  3 accounts  live: ada@example.com  switch at 90% (daemon)  every 10s   14:22:07
-  # ACCOUNT             EMAIL                  5H                        WEEKLY                    CAP    RATE     CHECKED
-  1*cdefault            ada@example.com        ██████░╵░░  62% 2h51m14s  ██░░░░░░╵░  23% 14h11m14s 80/90  +11.4%/h live
-  2  personal           ada.lovelace@gmail.com ░░░░░░░╵░░   4% 1h11m14s  ██░░░░░╵░░  18% 18h11m14s -      -        8m ago
-  3  client-acme        ada@acme.example       █░░░░░░╵░░   9% 2h21m14s  ████░░░╵░░  36% 4d08h11m  -      -        4m ago
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- next switch  in 1h 34m 48s (15:56)  5h is at 62%, climbing 11.4% an hour to its 80% cap
-              -> 2 personal at 4% 5h / 18% weekly
+ ccex  3 accounts  live: ada@example.com  switch at 90% (daemon)  every 10s   00:35:36
+    # ACCOUNT                   5H                               WEEKLY                        ROTATION   CHECKED
+›▶  1 ada@example.com            62% ███████░░░╵░ 2h 49m 22s      23% ███░░░░░░░░╵ 14h 09m 22s in pool    1m ago
+    2 ada@acme.example            9% █░░░░░░░░░╵░ 2h 19m 22s      36% ████░░░░░░░╵ 4d 08h 09m  in pool    1m ago
+    3 ada.lovelace@gmail.com      4% ░░░░░╵░░░░░░ 1h 09m 22s      18% ██░╵░░░░░░░░ 18h 09m 22s cap 50/30  1m ago
+
+ next switch  in 2h 27m 22s (03:02)  5h is at 62%, climbing 11.4% an hour to its 90% cap
+              -> 3 ada.lovelace@gmail.com at 4% 5h / 18% weekly
  rotation     rotating on data change, every 10s at 90%
- keys         number switch to that account (y to confirm)  +/- pace  r refresh  q quit
+ keys         ↑↓ select  enter switch to it  number by number  +/- pace  r refresh  q quit   up 0m
 ```
 
 `ccex ls` tells you where you stand; `ccex ls -w` leaves it on screen and folds the
@@ -134,13 +134,15 @@ destination needs no readings at all, so it is always there. A window that refil
 before the cap is reached says `weekly resets first` instead of naming a time that would
 never arrive.
 
-Typing an account's number switches to it — the same numbers `ccex use` takes, so `12`
-means account 12 — and `y` confirms before anything moves. Backspace edits, any other key
-cancels.
+Each row is one account by email, then each window as a percentage, a bar, and how long
+until it resets. `▶` marks the account you are billing and `›` the one the arrows are on.
+`ROTATION` answers the only question the old `x`/`c`/`X` marks were answering — whether
+rotation may choose this account — in words: `in pool`, `held`, `retired`, or `cap 50/30`.
 
 | Key | |
 | --- | --- |
-| `0`–`9` | type an account number to switch to it, `y` to confirm |
+| `↑` / `↓` | move the selection; `enter` switches to it |
+| `0`–`9` | or type an account's number, `y` to confirm (backspace edits) |
 | `+` / `-` | re-pace the data tick (10s, 30s, 1m, 5m, 15m, 30m) |
 | `r` | re-read everything now, `/proc` included |
 | `q` | quit |

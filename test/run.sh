@@ -266,7 +266,7 @@ t  "over threshold: switch now"   "now"                  frame 80
 t  "and names where it would go"  "b@example.com"        frame 80
 t  "under threshold: not yet"     "not yet"              frame 99
 t  "it says what it is watching"  "rotation"             frame 99
-absent "piped output has no escapes" "["$(printf '\033')"" frame 80
+absent "piped output has no escapes" "$(printf '\033')[" frame 80
 exits "--once exits 0"            0                      "$CCEX" ls -w --once --at 80
 prompt_line() {   # <digits> -> the line the view shows once they are typed
   CCEX_BASE="$HOME/.claude" CCEX_ROOT="$CC_PROFILE_ROOT" \
@@ -289,12 +289,50 @@ m["b@example.com"] = 12
 json.dump(m, open(p, "w"))
 PYEOF
 }
-t  "the keys line offers switching" "switch to that account" frame 80
+t  "the keys line offers switching" "enter"                  frame 80
 t  "a number asks before moving"    "switch to"            prompt_line "$(number_of)"
 t  "and names the account"          "b@example.com"        prompt_line "$(number_of)"
 t  "an unknown number says so"      "no account has that number" prompt_line 47
 renumber
 t  "a two-digit number is reachable" "b@example.com"       prompt_line 12
+teardown; setup
+drive() {   # <keys> through a real pty: what the view drew, escapes and all
+  python3 - "$CCEX" "$1" <<'PYEOF'
+import os, pty, select, sys, time
+ccex = sys.argv[1]
+keys = sys.argv[2].encode().decode("unicode_escape").encode()
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ.update(TERM="xterm-256color", COLUMNS="120", LINES="20")
+    os.execvp(ccex, ["ccex", "ls", "-w", "--at", "80"])
+buf, start, sent = b"", time.time(), False
+while time.time() - start < 4:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if r:
+        try:
+            c = os.read(fd, 65536)
+        except OSError:
+            break
+        if not c:
+            break
+        buf += c
+    if not sent and time.time() - start > 1.5:
+        os.write(fd, keys)      # arrows first, then whatever confirms
+        sent = True
+try:
+    os.write(fd, b"q")
+    time.sleep(0.3)
+except OSError:
+    pass
+print(buf.decode("utf8", "replace"))
+PYEOF
+}
+drove=$(drive '\x1b[B\r')
+t  "arrows mark the selected row"  "›"                       echo "$drove"
+t  "the live row keeps its arrow" "▶"                        echo "$drove"
+t  "enter switches to the selection" "b@example.com"          live_email
+
+teardown; setup                 # that pty run switched accounts; the rest wants a live again
 t  "a bad watch flag is refused"  "not a --watch option" "$CCEX" ls -w --bogus
 t  "and a bad duration too"       "cannot read"          "$CCEX" ls -w --every m
 t  "plain ls is untouched by it"  "CHECKED"              "$CCEX" ls

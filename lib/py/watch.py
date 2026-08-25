@@ -69,6 +69,38 @@ class Line:
         return "".join(out)
 
 
+GAP = "    "        # between the two windows: each is a percentage, a bar and a clock, and
+                    # they read as one thing only if there is space around them
+
+
+def layout(width):
+    """Column sizes for this terminal: the meters get the room, the rest gives way.
+
+    Widest first -- a longer bar is worth more than a second on the clock, which is worth
+    more than the age of a reading the panel also gives you.
+    """
+    bar = 16 if width >= 124 else 12 if width >= 100 else 10
+    secs = width >= 104                      # a countdown to the second, not just the minute
+    mail = 30 if width >= 130 else 26 if width >= 114 else 20
+    cell = 5 + bar + 1 + (11 if secs else 10)
+    fixed = 2 + 4 + mail + cell + len(GAP) + cell + 12
+    return bar, secs, mail, cell, width >= fixed + 9
+
+
+def fit_email(email, width):
+    """Shorten an address without losing the part that tells accounts apart.
+
+    Several accounts on one domain differ only to the left of the @, so a cut-off domain
+    is the one thing worth dropping.
+    """
+    if len(email) <= width:
+        return email
+    local, at, _ = email.partition("@")
+    if at and len(local) + 2 <= width:
+        return local + "@…"
+    return email[:max(0, width - 1)] + "…"
+
+
 def meter(pct, limit, width=10, colour=True):
     """A bar, coloured by how close this window is to the cap that applies to it.
 
@@ -100,6 +132,7 @@ class View:
         self.serving = False
         self.last_live, self.switches = None, []
         self.typed = ""                # account number being typed, waiting for y to confirm
+        self.cursor = None             # id of the selected row, kept across re-sorts
         self.sampled = 0.0
         self.stamp = self.mtime()
 
@@ -171,11 +204,10 @@ class View:
             a = account_json(name, d, now, self.pids)
             a["id"] = id_for(d) or 0
             burn.note(a["email"], a["five"], a["seven"])
-            # Rates are drawn, not decided on, so the daemon computes none of them, and
-            # only the live account's week is ever forecast.
-            a["rate_five"] = None if self.serving else burn.rate(a["email"], "five_hour", now)
-            a["rate_seven"] = (None if self.serving or name != "default"
-                               else burn.rate(a["email"], "seven_day", now))
+            # Only the forecast reads a rate, and it only forecasts the account you are on.
+            forecast = not self.serving and name == "default"
+            a["rate_five"] = burn.rate(a["email"], "five_hour", now) if forecast else None
+            a["rate_seven"] = burn.rate(a["email"], "seven_day", now) if forecast else None
             rows.append(a)
         rows.sort(key=lambda a: (a["id"] or 99, a["name"]))
         self.rows = rows
@@ -276,12 +308,24 @@ class View:
         """The account the digits typed so far name, if they name one yet."""
         return next((a for a in self.rows if str(a["id"]) == self.typed), None) if self.typed else None
 
+    def selected(self):
+        """The row the cursor is on: what the arrows moved to, or the account you are using."""
+        return next((a for a in self.rows if a["id"] == self.cursor), None) or self.live
+
+    def move(self, delta):
+        """Walk the cursor, by account rather than by index, so a re-sort cannot lose it."""
+        if not self.rows:
+            return
+        here = self.selected()
+        at = self.rows.index(here) if here in self.rows else 0
+        self.cursor = self.rows[max(0, min(len(self.rows) - 1, at + delta))]["id"]
+        self.typed = ""
+
     # ---- rendering ------------------------------------------------------------
 
     def frame(self, width, height, colour=True):
         L, now = [], time.time()
-        capcol = any(a["cap_five"] or a["cap_seven"] for a in self.rows)
-        wide = width >= 132
+        bar, secs, mail, cell, agecol = layout(width)
         live = self.live
 
         head = Line().add(" ccex ", BOLD + REV).add(" ")
@@ -294,13 +338,11 @@ class View:
         head.add(time.strftime(" %H:%M:%S"), DIM)
         L.append(head)
 
-        hdr = Line().add("  # ", REV).add("ACCOUNT", REV, 20)
-        if wide:
-            hdr.add("EMAIL", REV, 29)
-        hdr.add("5H", REV, 29).add("WEEKLY", REV, 29)
-        if capcol:
-            hdr.add("CAP", REV, 7)
-        hdr.add("RATE", REV, 9).add("CHECKED", REV, 9)
+        hdr = Line().add("    # ", REV).add("ACCOUNT", REV, mail)
+        hdr.add("5H", REV, cell + len(GAP)).add("WEEKLY", REV, cell)
+        hdr.add(" ROTATION", REV, 12)
+        if agecol:
+            hdr.add("CHECKED", REV, 9)
         L.append(hdr)
 
         shown = self.rows
@@ -309,48 +351,53 @@ class View:
             keep = [a for a in shown if a["name"] == "default"][:1]
             shown = (keep + [a for a in shown if a not in keep])[:room]
         for a in shown:
-            mark = "*" if a["name"] == "default" else " "
-            if a["held_auto"]:
-                mark += "X"
-            elif a["held"]:
-                mark += "x"
-            elif a["cap_five"] or a["cap_seven"]:
-                mark += "c"
-            else:
-                mark += " "
-            row = Line().add("%3s" % (a["id"] or "-"), BOLD if mark[0] == "*" else "")
-            row.add(mark, YELLOW if "x" in mark.lower() else CYAN)
-            row.add(a["name"][:18], BOLD if mark[0] == "*" else "", 19)
-            if wide:
-                row.add(a["email"], DIM, 29)
-            for key, rk, pk in (("five", "rate_five", "five_resets"),
-                                ("seven", "rate_seven", "seven_resets")):
+            here = a["name"] == "default"
+            # The account you are billing is the one fact you look for first, so it gets an
+            # arrow, not a punctuation mark in a column of them.
+            on = self.selected()
+            cursor = bool(on and on["id"] == a["id"])
+            row = Line().add("›", CYAN + BOLD) if cursor else Line().add(" ")
+            row.add("▶", GREEN + BOLD) if here else row.add(" ")
+            row.add("%3s " % (a["id"] or "-"), BOLD if here else GREY)
+            row.add(fit_email(a["email"], mail - 1), BOLD if here else DIM, mail)
+            for n, (key, rk, pk) in enumerate((("five", "rate_five", "five_resets"),
+                                               ("seven", "rate_seven", "seven_resets"))):
                 limit = cap(a, key, self.at)
                 pct = a[key]
                 if pct is None:
-                    row.add("-", GREY, 29)
-                    continue
-                for text, c in meter(pct, limit, 10, colour):
-                    row.add(text, c)
-                row.add("%4d%% " % pct, "")
-                t = a[pk]
-                left = t - now if t else None
-                if left is None:
-                    row.add("", "", 13)
-                elif left <= GRACE:
-                    row.add("new".ljust(13), GREEN)
+                    row.add("-", GREY, cell)
                 else:
-                    row.add(hms(left), YELLOW if left < 600 else "", 13)
-            if capcol:
-                own = a["cap_five"] or a["cap_seven"]
-                row.add("%s/%s" % (a["cap_five"] or "-", a["cap_seven"] or "-") if own else "-",
-                        GREY, 7)
-            row.add("+%.1f%%/h" % a["rate_five"] if a["rate_five"] else "-", GREY, 9)
-            row.add("live" if a["live"] else age_text(a["age_s"]),
-                    GREEN if a["live"] else GREY, 9)
+                    row.add("%3d%% " % pct, BOLD if here else "")
+                    for text, c in meter(pct, limit, bar, colour):
+                        row.add(text, c)
+                    row.add(" ")
+                    t, clock = a[pk], cell - bar - 6
+                    left = t - now if t else None
+                    if left is None:
+                        row.add("", "", clock)
+                    elif left <= GRACE:
+                        row.add("new".ljust(clock), GREEN)
+                    else:
+                        row.add(hms(left) if secs else hm(left),
+                                YELLOW if left < 600 else "", clock)
+                if n == 0:
+                    row.add(GAP)
+            # Why rotation would or would not choose this account, in words: the marks it
+            # used to be (c, x, X) all meant something about this one question.
+            state, tint = "in pool", GREY      # not `colour`: that is this frame's own flag
+            if a["held_auto"]:
+                state, tint = "retired", RED
+            elif a["held"]:
+                state, tint = "held", YELLOW
+            elif a["cap_five"] or a["cap_seven"]:
+                state, tint = "cap %s/%s" % (a["cap_five"] or "-", a["cap_seven"] or "-"), CYAN
+            row.add(" " + state, tint, 12)
+            if agecol:
+                row.add("live" if a["live"] else age_text(a["age_s"]),
+                        GREEN if a["live"] else GREY, 9)
             L.append(row)
 
-        L.append(Line().add("─" * width, GREY))
+        L.append(Line())               # a blank line, not a rule: the panel below is words
         best, resets_first, dest, why = self.forecast()
         nxt = Line().add(" next switch  ", BOLD)
         if self.verdict == "SWITCH":
@@ -369,7 +416,7 @@ class View:
 
         to = Line().add("              ", "")
         if dest:
-            to.add("-> ", GREY).add("%s %s" % (dest["id"], dest["name"]), GREEN + BOLD)
+            to.add("-> ", GREY).add("%s %s" % (dest["id"], dest["email"]), GREEN + BOLD)
             to.add(" at %d%% 5h / %d%% weekly" % (dest["five"], dest["seven"]))
             if dest["age_s"] and dest["age_s"] > 900:
                 to.add(" (numbers %dm old)" % (dest["age_s"] // 60), GREY)
@@ -404,8 +451,7 @@ class View:
         keys, pick = Line(), self.picked()
         if pick:
             keys.add(" switch to    ", BOLD)
-            keys.add("%s %s" % (pick["id"], pick["name"]), GREEN + BOLD)
-            keys.add(" (%s)" % pick["email"], DIM)
+            keys.add("%s %s" % (pick["id"], pick["email"]), GREEN + BOLD)
             keys.add("?  ").add("y", REV).add(" yes, anything else cancels", YELLOW)
         elif self.typed:
             keys.add(" switch to    ", BOLD).add(self.typed, YELLOW + BOLD)
@@ -413,7 +459,8 @@ class View:
                      YELLOW)
         else:
             keys.add(" keys         ", BOLD)
-            keys.add("number", REV).add(" switch to that account (y to confirm)  ")
+            keys.add("↑↓", REV).add(" select  ").add("enter", REV).add(" switch to it  ")
+            keys.add("number", REV).add(" by number  ")
             keys.add("+/-", REV).add(" pace  ").add("r", REV).add(" refresh  ")
             keys.add("q", REV).add(" quit   ")
             keys.add("up %s" % hm(now - self.started), GREY)
@@ -530,18 +577,32 @@ def main():
                         typing = os.read(sys.stdin.fileno(), 64).decode("utf8", "replace")
                     except OSError:
                         typing = ""
-                if typing.startswith("\x1b"):
-                    typing = ""             # an arrow or function key, not something typed
+
             else:
                 time.sleep(1.0)
-            for key in typing:
+            i = 0
+            while i < len(typing):
+                key = typing[i]
+                if key == "\x1b" and typing[i + 1:i + 2] in ("[", "O"):
+                    arrow = typing[i + 2:i + 3]      # \x1b[A / \x1bOA, terminal depending
+                    v.move(-1 if arrow == "A" else 1 if arrow == "B" else 0)
+                    i += 3
+                    continue
+                i += 1
                 if key in ("q", "Q", "\x03"):
                     return 0
-                if key.isdigit() and (v.typed or key != "0") and len(v.typed) < 3:
+                if key in ("\r", "\n"):
+                    on = v.picked() or v.selected()
+                    if on and on["name"] != "default":
+                        v.background("switching", [CCEX, "use", str(on["id"]), "--no-check"])
+                    v.typed = ""
+                elif key.isdigit() and (v.typed or key != "0") and len(v.typed) < 3:
                     # The numbers in the # column are the ones `ccex use` takes, so typing
                     # one here means the same thing it means there -- and they are typed
                     # rather than read one key at a time, so account 12 is reachable.
                     v.typed += key
+                    if v.picked():
+                        v.cursor = v.picked()["id"]      # typing moves the cursor too
                 elif key in ("\x7f", "\b") and v.typed:
                     v.typed = v.typed[:-1]
                 elif key in ("y", "Y") and v.picked():
