@@ -8,10 +8,10 @@ tokens stay exactly where they are.
 
 ```console
 $ ccex ls
-ACCOUNT         EMAIL                    TIER    TOKEN    REFRESH      5H            WEEKLY           CHECKED
-*default        ada@example.com          max_5x  6h56m    26d (20-09)  41% - 3h21m   23% - 14h41m     live
- personal       ada.lovelace@gmail.com   pro     stale    27d (21-09)  4% - 1h41m    18% - 18h41m     8m ago
- client-acme    ada@acme.example         max_5x  4h02m    28d (22-09)  9% - 2h51m    36% - 4d 8h41m   4m ago
+ACCOUNT        EMAIL                    TIER    TOKEN   REFRESH     5H                 WEEKLY                 CHECKED
+*default       ada@example.com          max_5x  6h56m   26d (20-09) ███░░░  41% 3h21m  █████░  23% 14h41m     live
+ personal      ada.lovelace@gmail.com   pro     stale   27d (21-09) █████░   4% 1h41m  █████░  18% 18h41m     8m ago
+ client-acme   ada@acme.example         max_5x  4h02m   28d (22-09) ████░░   9% 2h51m  ██░░░░  36% 4d 8h41m   4m ago
 
 $ ccex use client-acme
 ccex: ada@example.com -> parked as 'ada'; ada@acme.example -> live
@@ -218,6 +218,12 @@ a switch.
 **ACCESS-TOKEN** is the short-lived token Claude Code sends with each request; it lasts
 hours and Claude Code silently renews it, so `stale` is normal and harmless — it just
 means nothing has used that account lately.
+
+The bar in **5H** and **WEEKLY** is the window itself, not the usage: it fills as the
+reset approaches, so `██████ 22% 26m` is an account with a fifth of its week spent and the
+whole thing about to start over, while `██░░░░ 36% 4d 8h41m` is a third spent with four
+days to sit with it. Same idea `ccex rotate` uses to weigh candidates — the percentage
+alone doesn't tell you what it will cost you.
 
 **TOKEN** and **REFRESH** are the two OAuth clocks. **TIER** is your plan's rate-limit tier with the boilerplate trimmed — `max_5x` rather
 than `default_claude_max_5x`.

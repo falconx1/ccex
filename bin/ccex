@@ -20,13 +20,13 @@ case "$cmd" in
     declare -A FIVE SEVEN WHEN
     while IFS=$'\t' read -r n f s w; do FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; done \
       < <(limits --all --tsv --no-launch)
-    printf '%-20s %-30s %-7s %-8s %-12s %-13s %-16s %s\n' \
+    printf '%-20s %-30s %-7s %-7s %-11s %-18s %-22s %s\n' \
       ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY CHECKED
     while read -r p; do
       d=$(dir_for "$p")
       mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
       IFS=$'\t' read -r email tier state rstate < <(info "$d")
-      printf '%s%-19s %-30s %-7s %-8s %-12s %-13s %-16s %s\n' \
+      printf '%s%-19s %-30s %-7s %-7s %-11s %s %s %s\n' \
         "$mark" "$p" "$email" "$tier" "$state" "$rstate" \
         "${FIVE[$p]:--}" "${SEVEN[$p]:--}" "${WHEN[$p]:--}"
     done < <(profiles)

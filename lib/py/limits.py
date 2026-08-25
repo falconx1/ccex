@@ -167,8 +167,17 @@ def window(d, key):
     when = time.strftime("%H:%M" if time.strftime("%d-%m") == time.strftime("%d-%m", time.localtime(t))
                          else "%d-%m %H:%M", time.localtime(t))
     if left <= 0:
-        return "0%% used - window reset at %s, nothing measured since" % when
-    return "%d%% used, resets %s (%s)" % (pct, when, hm(left))
+        return "%s  0%% used - window reset at %s, nothing measured since" % (bar(0), when)
+    return "%s %3d%% used, resets %s (%s)" % (bar(1 - left / WINDOW[key]), pct, when, hm(left))
+
+WINDOW = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
+
+
+def bar(done, width=6):
+    """How far through its window a limit is, filling up as the reset approaches."""
+    n = max(0, min(width, int(round(done * width))))
+    return "\u2588" * n + "\u2591" * (width - n)
+
 
 def compact(d, key):
     pct, t = reset_at(d, key)
@@ -177,7 +186,9 @@ def compact(d, key):
     if t is None:
         return "%d%%" % pct
     left = t - time.time()
-    return "%d%% - %s" % (pct, hm(left)) if left > 0 else "0% (new)"
+    if left <= 0:
+        return "%s   0%% new" % bar(0)
+    return "%s %3d%% %s" % (bar(1 - left / WINDOW[key]), pct, hm(left))
 
 def still_counting(d):
     """True while some window we know about has not provably run out - i.e. old numbers still lie."""
@@ -263,7 +274,7 @@ if js:
     print(json.dumps(out))
 elif tsv:
     for name, d in targets:
-        print("\t".join([name, compact(d, "five_hour"), compact(d, "seven_day"),
+        print("\t".join([name, compact(d, "five_hour").ljust(18), compact(d, "seven_day").ljust(22),
                          "live" if cached(d)["source"] == "session" and live_sessions(d) else age(d)]))
 elif quiet and len(rows) == 1:
     name, email, five, seven, a = rows[0]
@@ -271,9 +282,9 @@ elif quiet and len(rows) == 1:
     print("        5h      %s" % five)
     print("        weekly  %s" % seven)
 else:
-    print("%-20s %-30s %-31s %-38s %s" % ("ACCOUNT", "EMAIL", "5-HOUR", "WEEKLY", "CHECKED"))
+    print("%-20s %-30s %-18s %-22s %s" % ("ACCOUNT", "EMAIL", "5-HOUR", "WEEKLY", "CHECKED"))
     for name, email, five, seven, a in rows:
         mark = "*" if name == "default" else " "
-        print("%s%-19s %-30s %-31s %-38s %s" % (mark, name, email, five, seven, a))
+        print("%s%-19s %-30s %-18s %-22s %s" % (mark, name, email, five, seven, a))
 for n in notes:
     print(n, file=sys.stderr)
