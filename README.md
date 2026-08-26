@@ -148,6 +148,8 @@ rotation may choose this account — in words: `in pool`, `held`, `retired`, or 
 | `↑` / `↓` | move the selection; `enter` switches to it |
 | `0`–`9` | or type an account's number, `y` to confirm (backspace edits) |
 | `a` | add an account — the browser login runs here, then the table has it |
+| `c` | cap the selected account: type the 5-hour percentage, `enter`, then the weekly one (`-` leaves a window uncapped) |
+| `→` / `←` | take it out of the rotation pool, or put it back — the way to revive a retired account |
 | `+` / `-` | re-pace the data tick (10s, 30s, 1m, 5m, 15m, 30m) |
 | `r` | re-read everything now, `/proc` included |
 | `q` | quit |
@@ -407,6 +409,10 @@ ccex: limits for ada.lovelace@gmail.com (checked 4m ago)
         cap     5h 50% / weekly 30% (its own; uncapped windows follow --at for 5h (default 90), 99% for the week)
 ```
 
+`c` in `ccex ls -w` does the same thing without the typing: it asks for the 5-hour
+percentage, then the weekly one, and `-` leaves a window on the default. `→` and `←` there
+are `pool out` and `pool in` on whichever account the arrows are on.
+
 `ccex pool cap <account>` on its own reports what is set; `--clear` puts the account back on
 the `--at` default. Caps live in `~/.claude-profiles/.caps.json`, keyed by email like the
 account numbers, so they survive rotations and renames. A held account outranks its own cap
@@ -562,14 +568,14 @@ actually help the work you're in the middle of.
 ./test/run.sh
 ```
 
-126 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
+138 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
 switching by name and number, exit codes, the pool, per-account caps, the week's own 99%
 and the retirement it triggers, rotation decisions, the statusline install, rendered frames
 of the live view (including the switch prompt and two-digit account numbers) and the
 burn-rate arithmetic behind its estimate, the daemon switching on a data change, staying
 quiet when it shouldn't and restarting itself on an update, two rotations racing each other,
-arrows and enter and `a` driven through a real pty, adding an account with and without a
-name, help for every command, and that parking never overwrites another account's login.
+the keys driven through a real pty — all four arrows, enter, `a` and `c` — adding an account
+with and without a name, capping and holding from the view, help for every command, and that parking never overwrites another account's login.
 No network, no real `claude` binary, nothing written outside a temp directory.
 
 ## Layout

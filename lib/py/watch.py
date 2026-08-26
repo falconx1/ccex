@@ -155,6 +155,8 @@ class View:
         self.last_live, self.switches = None, []
         self.typed = ""                # account number being typed, waiting for y to confirm
         self.cursor = None             # id of the selected row, kept across re-sorts
+        self.editing = None            # which window's cap is being typed: five, seven, None
+        self.entry, self.capbuf = "", {}
         self.sampled = 0.0
         self.stamp = self.mtime()
 
@@ -334,6 +336,49 @@ class View:
         """The row the cursor is on: what the arrows moved to, or the account you are using."""
         return next((a for a in self.rows if a["id"] == self.cursor), None) or self.live
 
+    def cap_start(self, window="five"):
+        """Open the cap editor on the selected account, prefilled with what it caps now."""
+        on = self.selected()
+        if not on:
+            return
+        self.typed = ""
+        self.editing = window
+        if window == "five":
+            self.capbuf = {}
+        have = on["cap_" + window]
+        self.entry = str(have) if have else ""
+
+    def cap_key(self, key):
+        """Digits, backspace, - to leave a window uncapped, enter to move on, esc to drop it."""
+        if key.isdigit() and len(self.entry) < 3:
+            self.entry += key
+        elif key in ("\x7f", "\b"):
+            self.entry = self.entry[:-1]
+        elif key in ("-", "x", "X"):
+            self.entry = ""
+        elif key in ("\r", "\n"):
+            self.capbuf[self.editing] = int(self.entry) if self.entry else None
+            if self.editing == "five":
+                return self.cap_start("seven")
+            self.cap_apply()
+        elif key in ("\x1b", "\x03"):
+            self.editing, self.entry, self.capbuf = None, "", {}
+
+    def cap_apply(self):
+        """Hand the two numbers to `ccex pool cap`, which owns what a cap means."""
+        on = self.selected()
+        self.editing, self.entry = None, ""
+        if not on:
+            return
+        cmd = [CCEX, "pool", "cap", str(on["id"])]
+        if any(v is None for v in self.capbuf.values()):
+            cmd.append("--clear")      # a window left empty goes back to the default
+        for flag, w in (("--5h", "five"), ("--weekly", "seven")):
+            if self.capbuf.get(w):
+                cmd += [flag, str(self.capbuf[w])]
+        self.capbuf = {}
+        self.background("capping", cmd)
+
     def move(self, delta):
         """Walk the cursor, by account rather than by index, so a re-sort cannot lose it."""
         if not self.rows:
@@ -471,7 +516,20 @@ class View:
                      .add("  ".join("%s %s" % s for s in self.switches[-2:]), CYAN))
 
         keys, pick = Line(), self.picked()
-        if pick:
+        on = self.selected()
+        if self.editing and on:
+            keys.add(" cap           ", BOLD)
+            keys.add("%s %s" % (on["id"], on["email"]), CYAN + BOLD).add("   ")
+            for w, label in (("five", "5h"), ("seven", "weekly")):
+                if w == self.editing:
+                    keys.add("%s: " % label, BOLD).add((self.entry or "-") + "▏", YELLOW + BOLD)
+                else:
+                    was = self.capbuf.get(w) if w in self.capbuf else on["cap_" + w]
+                    keys.add("%s: %s" % (label, was or "-"), GREY)
+                keys.add("  ")
+            keys.add("enter", REV).add(" next  ").add("-", REV).add(" uncapped  ")
+            keys.add("esc", REV).add(" cancel", "")
+        elif pick:
             keys.add(" switch to    ", BOLD)
             keys.add("%s %s" % (pick["id"], pick["email"]), GREEN + BOLD)
             keys.add("?  ").add("y", REV).add(" yes, anything else cancels", YELLOW)
@@ -482,7 +540,8 @@ class View:
         else:
             keys.add(" keys         ", BOLD)
             keys.add("↑↓", REV).add(" select  ").add("enter", REV).add(" switch  ")
-            keys.add("a", REV).add(" add account  ")
+            keys.add("←→", REV).add(" out/in  ")
+            keys.add("a", REV).add(" add  ").add("c", REV).add(" cap  ")
             keys.add("+/-", REV).add(" pace  ").add("r", REV).add(" refresh  ")
             keys.add("q", REV).add(" quit   ")
             keys.add("up %s" % hm(now - self.started), GREY)
@@ -607,13 +666,28 @@ def main():
                 key = typing[i]
                 if key == "\x1b" and typing[i + 1:i + 2] in ("[", "O"):
                     arrow = typing[i + 2:i + 3]      # \x1b[A / \x1bOA, terminal depending
-                    v.move(-1 if arrow == "A" else 1 if arrow == "B" else 0)
                     i += 3
+                    if v.editing:
+                        continue                     # arrows mean nothing to a percentage
+                    if arrow in ("A", "B"):
+                        v.move(-1 if arrow == "A" else 1)
+                    elif arrow in ("C", "D"):
+                        # Sideways is in and out of the pool: right pushes the account out
+                        # of rotation, left brings it back -- including one it retired.
+                        on = v.selected()
+                        if on:
+                            v.background("pool", [CCEX, "pool",
+                                                  "out" if arrow == "C" else "in", str(on["id"])])
                     continue
                 i += 1
+                if v.editing:
+                    v.cap_key(key)
+                    continue
                 if key in ("q", "Q", "\x03"):
                     return 0
-                if key in ("\r", "\n"):
+                if key in ("c", "C"):
+                    v.cap_start()
+                elif key in ("\r", "\n"):
                     on = v.picked() or v.selected()
                     if on and on["name"] != "default":
                         v.background("switching", [CCEX, "use", str(on["id"]), "--no-check"])

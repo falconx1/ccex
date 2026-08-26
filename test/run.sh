@@ -375,6 +375,38 @@ t  "a adds an account from the view" "ui@example.com"           "$CCEX" ls
 t  "and names its slot after it"     "ui"                       "$CCEX" ls
 
 teardown; setup
+cap_prompt() {   # <keys typed into the editor> -> the line it shows, or what it wrote
+  CCEX_BASE="$HOME/.claude" CCEX_ROOT="$CC_PROFILE_ROOT" \
+  PYTHONPATH="$(dirname "$CCEX")/../lib/py" python3 - "$1" <<'PYEOF'
+import sys
+import watch
+v = watch.View(at=80)
+v.sample()
+v.background = lambda label, cmd: print("would run: %s" % " ".join(cmd[1:]))
+v.cap_start()
+for key in sys.argv[1]:
+    v.cap_key("\r" if key == "|" else key)
+print(v.frame(126, 20, colour=False)[-1])
+print("editing=%s" % v.editing)
+PYEOF
+}
+t  "c opens a cap editor"          "cap "                     cap_prompt ""
+t  "on the selected account"       "a@example.com"            cap_prompt ""
+t  "digits fill the 5h field"      "5h: 60"                   cap_prompt "60|"
+t  "then it asks for the week"     "weekly:"                  cap_prompt "60|"
+t  "enter on both applies"         "editing=None"             cap_prompt "60|80|"
+t  "and passes both numbers on"    "pool cap 1 --5h 60 --weekly 80" cap_prompt "60|80|"
+t  "a dash leaves one uncapped"    "pool cap 1 --clear --weekly 30" cap_prompt "-|30|"
+absent "esc runs nothing"          "would run"                cap_prompt "60|$(printf '\033')"
+drive 'c60\r45\r' >/dev/null
+t  "the view really writes a cap"  "5h 60%, weekly 45%"       "$CCEX" pool cap 1
+t  "and ls shows it"               "60/45"                    "$CCEX" ls
+drive '\x1b[C' >/dev/null
+t  "right takes it out of the pool" "a@example.com"            cat "$CC_PROFILE_ROOT/.pool.json"
+drive '\x1b[D' >/dev/null
+absent "and left puts it back"      "a@example.com"            cat "$CC_PROFILE_ROOT/.pool.json"
+
+teardown; setup
 t  "a bad watch flag is refused"  "not a --watch option" "$CCEX" ls -w --bogus
 t  "and a bad duration too"       "cannot read"          "$CCEX" ls -w --every m
 t  "plain ls is untouched by it"  "CHECKED"              "$CCEX" ls
