@@ -384,7 +384,7 @@ stub_claude
 export CCEX_TEST_EMAIL=fresh@example.com PATH="$HOME/bin:$PATH"
 drove=$(drive a 4y)
 unset CCEX_TEST_EMAIL
-matches "a new account gets a number" "4 .*fresh@example\.com"  echo "$drove"
+matches "a new account gets a number" " 4 [^ ]*fresh@example\.com" echo "$drove"
 t  "and switching to it works"       "fresh@example.com"        live_email
 
 teardown; setup

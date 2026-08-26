@@ -568,7 +568,7 @@ actually help the work you're in the middle of.
 ./test/run.sh
 ```
 
-138 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
+140 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
 switching by name and number, exit codes, the pool, per-account caps, the week's own 99%
 and the retirement it triggers, rotation decisions, the statusline install, rendered frames
 of the live view (including the switch prompt and two-digit account numbers) and the
