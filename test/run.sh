@@ -331,16 +331,18 @@ renumber
 t  "a two-digit number is reachable" "b@example.com"       prompt_line 12
 teardown; setup
 drive() {   # <keys> through a real pty: what the view drew, escapes and all
-  python3 - "$CCEX" "$1" <<'PYEOF'
+  python3 - "$CCEX" "$1" ${2+"$2"} <<'PYEOF'
 import os, pty, select, sys, time
 ccex = sys.argv[1]
 keys = sys.argv[2].encode().decode("unicode_escape").encode()
+later = sys.argv[3].encode().decode("unicode_escape").encode() if len(sys.argv) > 3 else None
+limit = 6 if later else 4      # a second burst has to wait for what the first one started
 pid, fd = pty.fork()
 if pid == 0:
     os.environ.update(TERM="xterm-256color", COLUMNS="120", LINES="20")
     os.execvp(ccex, ["ccex", "ls", "-w", "--at", "80"])
 buf, start, sent = b"", time.time(), False
-while time.time() - start < 4:
+while time.time() - start < limit:
     r, _, _ = select.select([fd], [], [], 0.2)
     if r:
         try:
@@ -353,6 +355,9 @@ while time.time() - start < 4:
     if not sent and time.time() - start > 1.5:
         os.write(fd, keys)      # arrows first, then whatever confirms
         sent = True
+    if sent and later and time.time() - start > 3.0:
+        os.write(fd, later)     # a second burst: what the first one made possible
+        later = None
 try:
     os.write(fd, b"q")
     time.sleep(0.3)
@@ -373,6 +378,14 @@ drive a >/dev/null
 unset CCEX_TEST_EMAIL
 t  "a adds an account from the view" "ui@example.com"           "$CCEX" ls
 t  "and names its slot after it"     "ui"                       "$CCEX" ls
+
+teardown; setup                 # add, then switch to what was added, in one view
+stub_claude
+export CCEX_TEST_EMAIL=fresh@example.com PATH="$HOME/bin:$PATH"
+drove=$(drive a 4y)
+unset CCEX_TEST_EMAIL
+matches "a new account gets a number" "4 .*fresh@example\.com"  echo "$drove"
+t  "and switching to it works"       "fresh@example.com"        live_email
 
 teardown; setup
 cap_prompt() {   # <keys typed into the editor> -> the line it shows, or what it wrote
@@ -395,8 +408,8 @@ t  "on the selected account"       "a@example.com"            cap_prompt ""
 t  "digits fill the 5h field"      "5h: 60"                   cap_prompt "60|"
 t  "then it asks for the week"     "weekly:"                  cap_prompt "60|"
 t  "enter on both applies"         "editing=None"             cap_prompt "60|80|"
-t  "and passes both numbers on"    "pool cap 1 --5h 60 --weekly 80" cap_prompt "60|80|"
-t  "a dash leaves one uncapped"    "pool cap 1 --clear --weekly 30" cap_prompt "-|30|"
+t  "and passes both numbers on"    "cap a@example.com --5h 60 --weekly 80" cap_prompt "60|80|"
+t  "a dash leaves one uncapped"    "cap a@example.com --clear --weekly 30" cap_prompt "-|30|"
 absent "esc runs nothing"          "would run"                cap_prompt "60|$(printf '\033')"
 drive 'c60\r45\r' >/dev/null
 t  "the view really writes a cap"  "5h 60%, weekly 45%"       "$CCEX" pool cap 1

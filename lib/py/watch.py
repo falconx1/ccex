@@ -154,7 +154,7 @@ class View:
         self.serving = False
         self.last_live, self.switches = None, []
         self.typed = ""                # account number being typed, waiting for y to confirm
-        self.cursor = None             # id of the selected row, kept across re-sorts
+        self.cursor = None             # email of the selected row, kept across re-sorts
         self.editing = None            # which window's cap is being typed: five, seven, None
         self.entry, self.capbuf = "", {}
         self.sampled = 0.0
@@ -334,7 +334,7 @@ class View:
 
     def selected(self):
         """The row the cursor is on: what the arrows moved to, or the account you are using."""
-        return next((a for a in self.rows if a["id"] == self.cursor), None) or self.live
+        return next((a for a in self.rows if a["email"] == self.cursor), None) or self.live
 
     def cap_start(self, window="five"):
         """Open the cap editor on the selected account, prefilled with what it caps now."""
@@ -370,7 +370,7 @@ class View:
         self.editing, self.entry = None, ""
         if not on:
             return
-        cmd = [CCEX, "pool", "cap", str(on["id"])]
+        cmd = [CCEX, "pool", "cap", on["email"]]
         if any(v is None for v in self.capbuf.values()):
             cmd.append("--clear")      # a window left empty goes back to the default
         for flag, w in (("--5h", "five"), ("--weekly", "seven")):
@@ -385,7 +385,7 @@ class View:
             return
         here = self.selected()
         at = self.rows.index(here) if here in self.rows else 0
-        self.cursor = self.rows[max(0, min(len(self.rows) - 1, at + delta))]["id"]
+        self.cursor = self.rows[max(0, min(len(self.rows) - 1, at + delta))]["email"]
         self.typed = ""
 
     # ---- rendering ------------------------------------------------------------
@@ -422,7 +422,7 @@ class View:
             # The account you are billing is the one fact you look for first, so it gets an
             # arrow, not a punctuation mark in a column of them.
             on = self.selected()
-            cursor = bool(on and on["id"] == a["id"])
+            cursor = bool(on and on["email"] == a["email"])
             row = Line().add("›", CYAN + BOLD) if cursor else Line().add(" ")
             row.add("▶", GREEN + BOLD) if here else row.add(" ")
             row.add("%3s " % (a["id"] or "-"), BOLD if here else GREY)
@@ -677,7 +677,7 @@ def main():
                         on = v.selected()
                         if on:
                             v.background("pool", [CCEX, "pool",
-                                                  "out" if arrow == "C" else "in", str(on["id"])])
+                                                  "out" if arrow == "C" else "in", on["email"]])
                     continue
                 i += 1
                 if v.editing:
@@ -690,7 +690,7 @@ def main():
                 elif key in ("\r", "\n"):
                     on = v.picked() or v.selected()
                     if on and on["name"] != "default":
-                        v.background("switching", [CCEX, "use", str(on["id"]), "--no-check"])
+                        v.background("switching", [CCEX, "use", on["email"], "--no-check"])
                     v.typed = ""
                 elif key.isdigit() and (v.typed or key != "0") and len(v.typed) < 3:
                     # The numbers in the # column are the ones `ccex use` takes, so typing
@@ -698,11 +698,11 @@ def main():
                     # rather than read one key at a time, so account 12 is reachable.
                     v.typed += key
                     if v.picked():
-                        v.cursor = v.picked()["id"]      # typing moves the cursor too
+                        v.cursor = v.picked()["email"]   # typing moves the cursor too
                 elif key in ("\x7f", "\b") and v.typed:
                     v.typed = v.typed[:-1]
                 elif key in ("y", "Y") and v.picked():
-                    v.background("switching", [CCEX, "use", v.typed, "--no-check"])
+                    v.background("switching", [CCEX, "use", v.picked()["email"], "--no-check"])
                     v.typed = ""
                 elif key in ("a", "A"):
                     v.typed = ""

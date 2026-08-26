@@ -176,39 +176,38 @@ def caps(d):
     return c.get("five_hour"), c.get("seven_day")
 
 
-_ids = None
-
-
 def ids():
     """A small stable integer per account, so `ccex use 2` means the same account tomorrow.
 
     Numbers are keyed to the email, not to position, so rotating or adding an account
-    never renumbers the others. The lowest free number goes to each new account.
+    never renumbers the others, and the lowest free number goes to each new account. The
+    map is read through `fresh`, not remembered: `ccex ls -w` runs for days, and an account
+    added while it is up has to get a number like any other.
     """
-    global _ids
-    if _ids is not None:
-        return _ids
-    m = load(IDS)
-    used, new = set(m.values()), False
+    m = fresh(IDS)
+    used, new = set(m.values()), {}
     for _, d in slots():
         e = email_for(d)
-        if e and e not in m:
+        if e and e not in m and e not in new:
             n = 1
             while n in used:
                 n += 1
-            m[e], new = n, True
+            new[e] = n
             used.add(n)
-    if new:
-        try:
-            save(IDS, m)                # written once and reused; `ccex rm` releases one
-        except OSError:
-            pass
-    _ids = m
+    if not new:
+        return m
+    m = {**m, **new}                    # never mutate what `fresh` handed back
+    try:
+        save(IDS, m)                    # `ccex rm` is what releases one again
+    except OSError:
+        pass
     return m
 
 
 def id_for(d):
-    return ids().get(email_for(d))
+    e = email_for(d)
+    known = fresh(IDS)                  # the common case: one stat, no scan of the slots
+    return known[e] if e in known else ids().get(e)
 
 
 def expand(target):
