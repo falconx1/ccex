@@ -55,7 +55,7 @@ Needs `bash`, `python3`, and the `claude` CLI on your PATH.
 | `ccex rotate` | if the live account is running out of room, switch to the one with the most left |
 | `ccex rotate --bg` | keep rotating in the background, as soon as usage says so |
 | `ccex rotate --watch` | follow it in this terminal, one line per check |
-| `ccex add <name>` | browser login for another account, parked for later |
+| `ccex add` | browser login for another account, parked under its own name |
 
 `<account>` is the number from the `#` column, a slot name, a full email, or any
 unambiguous prefix of either — so `ccex use 3`, `ccex use acme`, `ccex use client-acme` and
@@ -78,8 +78,12 @@ until you `ccex rm` it, which releases the number for the next account to take.
 | `ccex record` | the statusline filter that keeps limits current — see below |
 | `ccex record --install` | wire it into your statusline, once |
 
-Run `ccex <command> -h` for that command's flags. To re-authenticate an account whose
-login has expired, `ccex add` it again under the same name.
+Run `ccex <command> -h` for that command's flags.
+
+`ccex add` needs no name: it logs in, then parks the account under its own — `ada@acme.example`
+becomes `acme`. Logging in as an account you already have re-authenticates that slot rather
+than making a second one, which is what an expired REFRESH date calls for. `a` in
+`ccex ls -w` runs the whole thing without leaving the view.
 
 ## Knowing when you'll hit a limit
 
@@ -143,6 +147,7 @@ rotation may choose this account — in words: `in pool`, `held`, `retired`, or 
 | --- | --- |
 | `↑` / `↓` | move the selection; `enter` switches to it |
 | `0`–`9` | or type an account's number, `y` to confirm (backspace edits) |
+| `a` | add an account — the browser login runs here, then the table has it |
 | `+` / `-` | re-pace the data tick (10s, 30s, 1m, 5m, 15m, 30m) |
 | `r` | re-read everything now, `/proc` included |
 | `q` | quit |
@@ -557,14 +562,15 @@ actually help the work you're in the middle of.
 ./test/run.sh
 ```
 
-109 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
+126 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
 switching by name and number, exit codes, the pool, per-account caps, the week's own 99%
 and the retirement it triggers, rotation decisions, the statusline install, rendered frames
 of the live view (including the switch prompt and two-digit account numbers) and the
 burn-rate arithmetic behind its estimate, the daemon switching on a data change, staying
 quiet when it shouldn't and restarting itself on an update, two rotations racing each other,
-help for every command, and that parking never overwrites another account's login. No network, no `claude`
-binary, no terminal needed, nothing written outside a temp directory.
+arrows and enter and `a` driven through a real pty, adding an account with and without a
+name, help for every command, and that parking never overwrites another account's login.
+No network, no real `claude` binary, nothing written outside a temp directory.
 
 ## Layout
 

@@ -188,6 +188,40 @@ t  "and it pipes into it"        "record | my-own-bar"     cat "$HOME/.claude/se
 t  "settings.json is backed up"  "settings.json"           find "$HOME/.claude-profiles/.backups/" -name settings.json
 t  "a bad flag does not hang"    "unknown option"          "$CCEX" record --instal
 
+echo "adding an account"
+teardown; setup
+stub_claude() {   # a `claude auth login` that succeeds, as whoever CCEX_TEST_EMAIL says
+  mkdir -p "$HOME/bin"
+  cat > "$HOME/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+python3 - "$CLAUDE_CONFIG_DIR" "$CCEX_TEST_EMAIL" <<'PYEOF'
+import json, os, sys, time
+d, email = sys.argv[1], sys.argv[2]
+json.dump({"claudeAiOauth": {"accessToken": "t-" + email, "refreshToken": "r-" + email,
+           "expiresAt": int(time.time() + 3600) * 1000,
+           "refreshTokenExpiresAt": int(time.time() + 30 * 86400) * 1000}},
+          open(d + "/.credentials.json", "w"))
+p = d + "/.claude.json"
+cfg = json.load(open(p)) if os.path.exists(p) else {}
+cfg["oauthAccount"] = {"emailAddress": email, "accountUuid": email,
+                       "userRateLimitTier": "default_claude_max_5x"}
+json.dump(cfg, open(p, "w"))
+PYEOF
+EOF
+  chmod +x "$HOME/bin/claude"
+}
+adds() { PATH="$HOME/bin:$PATH" CCEX_TEST_EMAIL="$1" "$CCEX" add ${2+"$2"}; }
+stub_claude
+t  "add with no name takes the account's" "parked as new" adds new@example.com
+t  "and it is a real account now"         "new@example.com"        "$CCEX" ls
+t  "the scratch slot is gone"             "no .adding"             bash -c '[ -e "$1/.adding" ] && echo "still there" || echo "no .adding"' _ "$CC_PROFILE_ROOT"
+t  "the same account again re-authenticates" "re-authenticated"    adds new@example.com
+absent "and does not make a second slot"  "new-2"                  "$CCEX" ls
+t  "the live account is recognised"       "already running"        adds a@example.com
+t  "a name still works"                   "logging in to profile"  adds other@example.com work
+t  "and is used as given"                 "work"                   "$CCEX" ls
+t  "a login that fails adds nothing"      "nothing was added"      bash -c 'PATH=/nonexistent:/usr/bin:/bin "$1" add' _ "$CCEX"
+
 echo "a spent week"
 teardown; setup                 # a is live at 90/40, bee at 10/20, cee at 50/30
 t  "the week follows 99, not --at" "under 95% 5h / 99% weekly" "$CCEX" rotate --at 95 -n --no-launch
@@ -333,6 +367,14 @@ t  "the live row keeps its arrow" "▶"                        echo "$drove"
 t  "enter switches to the selection" "b@example.com"          live_email
 
 teardown; setup                 # that pty run switched accounts; the rest wants a live again
+stub_claude
+export CCEX_TEST_EMAIL=ui@example.com PATH="$HOME/bin:$PATH"
+drive a >/dev/null
+unset CCEX_TEST_EMAIL
+t  "a adds an account from the view" "ui@example.com"           "$CCEX" ls
+t  "and names its slot after it"     "ui"                       "$CCEX" ls
+
+teardown; setup
 t  "a bad watch flag is refused"  "not a --watch option" "$CCEX" ls -w --bogus
 t  "and a bad duration too"       "cannot read"          "$CCEX" ls -w --every m
 t  "plain ls is untouched by it"  "CHECKED"              "$CCEX" ls

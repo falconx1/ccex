@@ -50,6 +50,7 @@ it needs a few minutes of readings before it can say.
 
   up/down  move the selection, enter switches to it
   0-9      or type an account's number, y to confirm (backspace edits)
+  a        add an account: the browser login runs here, then the table has it
   +/-      re-pace it (10s, 30s, 1m, 5m, 15m, 30m)   r  re-read now    q  quit
 
 Each row is one account by email, then each window as a percentage, a bar with a tick
@@ -162,13 +163,15 @@ capped -- `60/99` caps both, `-/25` only the week.
 U
 ;;
     add) cat <<'U'
-ccex add <name> [--email you@example.com]
+ccex add [<name>] [--email you@example.com]
 
-Browser login for another account, parked under ~/.claude-profiles/<name>/ for later.
-Its settings, history and plugins are symlinked to your real ones.
+Browser login for another account, parked under ~/.claude-profiles/ for later. Its
+settings, history and plugins are symlinked to your real ones.
 
-Run it again on a name that already exists to re-authenticate that account, which is
-what an expired REFRESH date calls for.
+With no name, the slot is named after whoever logs in -- ada@acme.example parks as
+`acme`. Logging in as an account you already have re-authenticates that slot instead of
+making a second one, which is what an expired REFRESH date calls for. Naming it yourself
+still works, and `ccex add <existing>` re-authenticates that slot.
 U
 ;;
     run) cat <<'U'
@@ -193,7 +196,7 @@ ccex — switch which Claude account Claude Code runs as
   ccex rotate --bg            keep doing that in the background, the moment usage says so
   ccex pool out|in <account>  take an account out of the rotation pool, or put it back
   ccex pool cap <account>     how far rotation may spend that one account (--5h, --weekly)
-  ccex add <name>             browser login for another account, parked for later
+  ccex add [<name>]           browser login for another account, parked for later
   ccex rm <account>           delete a parked account and its login
   ccex run <account> [args]   run claude as a parked account, leaving the live one alone
   ccex env <account>          eval "$(ccex env work)" to set CLAUDE_CONFIG_DIR
@@ -280,14 +283,45 @@ case "$cmd" in
     done < <(profiles) | sort -n        # by id, so the numbers you type read in order
     ;;
   add)
-    [ $# -ge 1 ] || die "usage: ccex add <name> [--email you@example.com]"
-    name=$1; shift
-    d=$(dir_for "$name")
-    [ "$d" = "$BASE" ] && die "'default' is the existing ~/.claude account"
+    # A name is optional: the account knows its own, we just cannot ask until it has
+    # logged in. So with no name the login happens in a scratch slot, and the slot is
+    # named after the account that turns up in it.
+    name=; case "${1:-}" in ''|-*) ;; *) name=$1; shift ;; esac
+    scratch=
+    if [ -n "$name" ]; then
+      d=$(dir_for "$name")
+      [ "$d" = "$BASE" ] && die "'default' is the existing ~/.claude account"
+    else
+      scratch="$ROOT/.adding"; d=$scratch
+      rm -rf "$scratch"; mkdir -p "$scratch"
+    fi
     link_shared "$d"
     seed "$d"
-    printf 'ccex: logging in to profile %s (%s)\n' "$name" "$d" >&2
-    CLAUDE_CONFIG_DIR="$d" claude auth login "$@"
+    printf 'ccex: logging in%s\n' "${name:+ to profile $name ($d)}" >&2
+    CLAUDE_CONFIG_DIR="$d" claude auth login "$@" || {
+      [ -n "$scratch" ] && rm -rf "$scratch"; die "login did not finish; nothing was added"; }
+    if [ -n "$scratch" ]; then
+      IFS=$'\t' read -r email _ < <(info "$scratch")
+      case "$email" in ''|-) rm -rf "$scratch"; die "no account was logged in" ;; esac
+      known=
+      while read -r p; do            # the same account again is a re-authentication
+        IFS=$'\t' read -r e _ < <(info "$(dir_for "$p")")
+        [ "$e" = "$email" ] && { known=$p; break; }
+      done < <(profiles)
+      if [ "$known" = default ]; then
+        rm -rf "$scratch"
+        printf 'ccex: %s is the account you are already running; nothing to park\n' "$email"
+      elif [ -n "$known" ]; then
+        rm -rf "$ROOT/$known" && mv "$scratch" "$ROOT/$known"
+        printf 'ccex: re-authenticated %s (%s)\n' "$email" "$known"
+      else
+        slot=$(python3 -c 'import sys, ccexlib; print(ccexlib.canon(sys.argv[1]))' "$email")
+        target="$ROOT/$slot"; n=2
+        while [ -e "$target" ]; do target="$ROOT/$slot-$n"; n=$((n + 1)); done
+        mv "$scratch" "$target"
+        printf 'ccex: added %s, parked as %s\n' "$email" "$(basename "$target")"
+      fi
+    fi
     ;;
   run)
     [ $# -ge 1 ] || die "usage: ccex run <name> [claude args...]"

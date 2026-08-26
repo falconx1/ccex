@@ -25,6 +25,28 @@ RESET, BOLD, DIM, REV = "\033[0m", "\033[1m", "\033[2m", "\033[7m"
 RED, GREEN, YELLOW, CYAN, GREY = "\033[31m", "\033[32m", "\033[33m", "\033[36m", "\033[90m"
 
 
+def handover(old, cmd):
+    """Give the terminal to something interactive, then take it back.
+
+    A browser login prints URLs and waits on keys, so it cannot run behind an alternate
+    screen or in cbreak mode -- and it cannot run in a thread either, because it wants
+    this terminal. So the view steps out of the way and redraws when it is done.
+    """
+    sys.stdout.write("\033[?25h\033[?1049l")
+    sys.stdout.flush()
+    if old:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old)
+    try:
+        return subprocess.call(cmd)
+    except (OSError, KeyboardInterrupt):
+        return 1
+    finally:
+        sys.stdout.write("\033[?1049h\033[?25l")
+        sys.stdout.flush()
+        if old:
+            tty.setcbreak(sys.stdin.fileno())
+
+
 def run_lines(cmd, timeout=180):
     """Run something that switches accounts, and hand back the lines it had to say."""
     out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -459,8 +481,8 @@ class View:
                      YELLOW)
         else:
             keys.add(" keys         ", BOLD)
-            keys.add("↑↓", REV).add(" select  ").add("enter", REV).add(" switch to it  ")
-            keys.add("number", REV).add(" by number  ")
+            keys.add("↑↓", REV).add(" select  ").add("enter", REV).add(" switch  ")
+            keys.add("a", REV).add(" add account  ")
             keys.add("+/-", REV).add(" pace  ").add("r", REV).add(" refresh  ")
             keys.add("q", REV).add(" quit   ")
             keys.add("up %s" % hm(now - self.started), GREY)
@@ -608,6 +630,11 @@ def main():
                 elif key in ("y", "Y") and v.picked():
                     v.background("switching", [CCEX, "use", v.typed, "--no-check"])
                     v.typed = ""
+                elif key in ("a", "A"):
+                    v.typed = ""
+                    handover(old, [CCEX, "add"])
+                    painted, size_was = [], None      # the login wrote all over the screen
+                    v.sampled = v.walked = 0.0
                 elif key in ("+", "="):
                     v.every = next((p for p in PRESETS if p > v.every), PRESETS[-1])
                     v.typed = ""
