@@ -75,6 +75,8 @@ until you `ccex rm` it, which releases the number for the next account to take.
 | `ccex pool out \| in <account>` | take an account out of the rotation pool, or put it back |
 | `ccex pool cap <account>` | how far rotation may spend that one account — see below |
 | `ccex rm <account>` | delete a parked slot and its credential |
+| `ccex tray --install` | put ccex in the top bar, with a switch behind every row — see below |
+| `ccex ls --json` | the same rows the table is drawn from, for anything that reads ccex |
 | `ccex record` | the statusline filter that keeps limits current — see below |
 | `ccex record --install` | wire it into your statusline, once |
 
@@ -642,6 +644,88 @@ and costs about 7ms on the renders where it does nothing. Numbers are filed unde
 account whose numbers they are rather than under whoever is live, which is why they stay
 right across a switch.
 
+## In the top bar
+
+```console
+$ ccex tray --install
+ccex: in the top bar now, and at every login (ccex tray --stop removes it)
+```
+
+An indicator next to the clock: the live account and how much of its 5-hour window is
+gone, and under it `ccex ls` with the columns a menu has room for.
+
+```
+●   dev-team008          5h  83% ████████▒░ 3h28m   ·  wk  37% ████▒▒▒▒▒▒ 1d 15h58m
+───────────────────────────────────────────────────────────────────────────────────
+10  dev-team019          5h   0% ▒▒▒▒▒▒▒▒▒░ 3h48m   ·  wk   0% ▒▒▒▒▒▒▒▒▒▒ 5d 3h58m
+ 8  dev-team001          5h   0% ▒▒▒▒▒░░░░░ new     ·  wk  36% ████▒▒░░░░ 4d 4h58m
+ 1  dev-team018          5h   0% ▒▒▒▒▒▒▒▒▒░ new     ·  wk  38% ████▒▒▒▒▒▒ 4d 15h58m
+ 4  jessrichardson1105   5h   0% ▒▒▒▒▒▒░░░░ new     ·  wk  74% ███████▒░░ 1d 22h58m
+ 5  thanhnh              5h   8% █▒▒▒▒▒▒▒░░ 28m     ·  wk  26% ███▒▒▒▒▒▒░ 5d 4h58m
+ 2  dev-team011          5h  90% █████████░ 18m     ·  wk  71% ███████▒▒▒ 5d 8h58m
+───────────────────────────────────────────────────────────────────────────────────
+Rotate now
+Quit
+```
+
+The same columns as `ccex ls -w`, in its order: the number, the account, then each window
+as a percentage, its meter and the clock it comes back on — `new` for one that already has
+and has had nothing measured since. The live account gets the same row as everyone else,
+marked where its number would be.
+
+The rows are ordered by what the 5-hour window has left, emptiest first, because the menu
+answers one question — which account do I go to — and the account with the most room
+answers it far more often than the account with the lowest number. The numbers stay in
+their column, so `ccex use 5` and the fifth row keep meaning different things on purpose:
+one is the account, the other is wherever it happens to be sitting.
+
+The meters have three shades where the table has two, because a menu row has neither colour
+nor a `CAP` column to explain itself with:
+
+| | |
+| --- | --- |
+| `████████` | spent |
+| `▒▒▒▒▒▒▒▒` | yours to spend, until rotation moves off |
+| `░░░░░░░░` | past that — a cap you set, or the threshold the daemon is running at |
+
+So account 4, capped at 60%, shows four cells it will never be allowed to spend, and
+account 1 — uncapped, against a daemon at 90% — shows one.
+
+Lining any of that up takes more than spaces. A menu label is plain text — no markup
+survives the trip to the panel — drawn in the desktop's UI font, where no two letters are
+the same width, so a name padded by counting characters lands somewhere different on every
+row. ccex measures instead: Pango is asked what each cell comes to in that font, and the
+difference is made up in thin and hair spaces, which gets every row's next column onto the
+same pixel. The meters need none of that — every shade is from one block and one width —
+and neither do the percentages, since digits in a UI font are already all one width.
+
+A row switches to that account by running `ccex use` — so a click gets the same verified
+switch the terminal gets. The account is read before the slot moves, a spent one hands over
+to the next with room, and a held one is refused with the command that puts it back.
+
+Notifications are for the two things worth interrupting you: **the live account changed** —
+by your click, by a terminal, or by rotation while you were elsewhere — or **a switch was
+refused**, in the words `ccex use` refused it in. Anything that moved nothing says nothing,
+so `Rotate now` with room to spare is silent. There is one more, before the fact: when the
+live account comes within 5 points of where rotation would move off it — its own cap, or
+whatever `--at` the daemon is really running — the panel says so once, and says it again
+only once that window has started over.
+
+Drawing it costs nothing. The rows come from the files `ccex ls` reads, once every ten
+seconds, and nothing here ever starts a session to fill in a panel — with `ccex record` in
+your statusline they are as current as your last render.
+
+It needs python's appindicator typelib:
+
+```sh
+sudo apt install gir1.2-ayatanaappindicator3-0.1
+```
+
+and a desktop that draws tray icons at all. GNOME draws none itself; Ubuntu's AppIndicator
+extension is on by default, and `ccex tray --install` says so when nothing like it is
+enabled. `ccex tray --stop` takes it back out, `ccex tray --status` says whether it is
+running, and plain `ccex tray` runs it in this terminal instead of as a service.
+
 ## Reading `ccex ls`
 
 **TOKEN** is the short-lived token Claude Code sends with each request. Claude Code
@@ -729,6 +813,7 @@ lib/profile.sh        symlinking a profile to your real config, and making an ac
 lib/limits.sh         the limits command, and the statusline recorder's throttle
 lib/rotate.sh         turning a decision into a switch
 lib/background.sh     the systemd service, the foreground watch, and one tick
+lib/tray.sh           finding the desktop's indicator support, and the login service
 lib/py/ccexlib.py     paths, JSON read/write, slots, numbers, the pool -- imported by the rest
 lib/py/use.py         the credential handover, the one place accounts move
 lib/py/usage.py       reading the two windows: session, cache, clock -- no launching
@@ -738,6 +823,7 @@ lib/py/decide.py      which account to move to, and why -- shared by rotate and 
 lib/py/rotate.py      that decision as one line for the shell, once the target is verified
 lib/py/burn.py        how fast a window is climbing, and when it hits its cap
 lib/py/watch.py       `ccex ls -w`: the live table with the monitor folded in
+lib/py/tray.py        `ccex tray`: the same table as a panel indicator and its menu
 lib/py/record.py      statusline payload in, limits snapshot out
 lib/py/statusline.py  the one-time statusLine edit in settings.json
 lib/py/info.py        one `ccex ls` row
@@ -745,6 +831,7 @@ lib/py/seed.py        onboarding and trust for a fresh profile
 lib/py/pool.py        holding an account out of rotation, and capping how far it is spent
 lib/py/forget.py      releasing a number, pool entry and cap when an account is removed
 share/statusline.sh   the bundled statusline, installed when you have none
+share/ccex-symbolic.svg  the panel icon
 test/run.sh           the suite above
 ```
 

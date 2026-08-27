@@ -11,12 +11,12 @@ export CCEX_BIN="$SELF"
 [ -d "$CCEX_PY" ] || { printf 'ccex: cannot find its lib/ next to %s\n' "$SELF" >&2; exit 1; }
 
 # shellcheck source=../lib/common.sh
-for m in common profile limits rotate background; do . "$CCEX_LIB/$m.sh"; done
+for m in common profile limits rotate background tray; do . "$CCEX_LIB/$m.sh"; done
 
 usage() {   # `ccex -h` for the overview, `ccex <command> -h` for one command
   case "${1:-}" in
     ls|list) cat <<'U'
-ccex ls [<account>] [--force]
+ccex ls [<account>] [--force] [--json]
 ccex ls -w|--watch [--every 5s] [--at N] [--refresh 15m] [--rotate]
 
 With no account, every account as one row each:
@@ -31,6 +31,9 @@ With no account, every account as one row each:
   CAP       5h/weekly percentages this account counts as out of room at, if it sets its
             own (`ccex pool cap`); the column is only there once something is capped
   CHECKED   how old those numbers are; `live` means a session is reporting now
+
+--json prints the rows the table is drawn from, for anything else that wants them: every
+account, or the one you name.
 
 Reads files only — never starts a session, however stale the numbers are, unless you
 ask with --force, which asks the account itself even when it is parked. Name an account to get its two windows in full instead, with clock
@@ -197,6 +200,53 @@ are marked c in `ccex ls`, which also grows a CAP column showing 5h/weekly once 
 capped -- `60/99` caps both, `-/25` only the week.
 U
 ;;
+    tray) cat <<'U'
+ccex tray [--install|--stop|--status]
+
+ccex in the top bar: the live account and what it has left as the panel label, every other
+account one click below it, and the switch happens where you are rather than in a terminal.
+
+  --install   start it now and at every login
+  --stop      take it out of the top bar again
+  --status    whether it is running
+
+The menu is the live view's table -- the number, the account, then each window as a
+percentage, its meter and the clock it resets on -- ordered by what the 5-hour window has
+left rather than by number, so the account worth switching to is the one nearest the top. A menu label is plain text drawn in the desktop's own
+font, where no two letters are the same width, so every cell is measured and padded to one
+width rather than counted -- which is what lets the columns after a name line up at all.
+
+The meters have three shades where the table has two, because a menu row has no colour and
+no CAP column to explain itself with:
+
+  ████████   spent
+  ▒▒▒▒▒▒▒▒   yours to spend, until rotation moves off
+  ░░░░░░░░   past that -- a cap you set, or the threshold the daemon is running at
+
+So an account capped at 60% shows four cells it will never be allowed to spend.
+
+A row switches to that account through `ccex use`: the same reading before it moves, the
+same refusals, the same handover to an account with room when the one you picked has none.
+
+Notifications are for the two things worth interrupting you: the live account changed --
+by your click, by a terminal, or by rotation while you were elsewhere -- or a switch was
+refused, in the words `ccex use` refused it in. Anything that moved nothing says nothing.
+There is one more, before the fact: when the live account comes within 5 points of where
+rotation would move off it, the panel says so once, and again only when that window has
+started over.
+
+`Rotate now` is `ccex rotate`.
+
+Reading costs nothing: the numbers come from the same files `ccex ls` reads, every ten
+seconds, and no session is ever started to draw a panel. They are as current as whatever is
+feeding them, which for a statusline with `ccex record` in it is every render.
+
+It needs a desktop that draws tray icons -- GNOME does not on its own, but Ubuntu's
+AppIndicator extension is on by default -- and python's appindicator typelib:
+
+  sudo apt install gir1.2-ayatanaappindicator3-0.1
+U
+;;
     add) cat <<'U'
 ccex add [<name>] [--email you@example.com]
 
@@ -235,6 +285,7 @@ ccex — switch which Claude account Claude Code runs as
   ccex rm <account>           delete a parked account and its login
   ccex run <account> [args]   run claude as a parked account, leaving the live one alone
   ccex env <account>          eval "$(ccex env work)" to set CLAUDE_CONFIG_DIR
+  ccex tray --install         the same table in the top bar, switching from the menu
   ccex record                 statusline filter that keeps limits current for free
   ccex record --install       wire that filter into your statusline, once
 
@@ -284,6 +335,10 @@ case "$cmd" in
       exec python3 "$CCEX_PY/watch.py" ${wargs[@]+"${wargs[@]}"} ;;
     esac
     how=--no-launch; case " $* " in *" --force "*) how=--force ;; esac
+    case " $* " in *" --json "*)      # the rows the table is drawn from, for anything that reads ccex
+      [ $# -gt 0 ] && [ "${1#-}" = "$1" ] || set -- --all "$@"
+      limits --quiet "$how" "$@"; exit 0 ;;
+    esac
     if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then limits --quiet "$how" "$@"; exit 0; fi
     cur="${CLAUDE_CONFIG_DIR:-$BASE}"
     declare -A ID FIVE SEVEN WHEN FLAGS CAP
@@ -436,6 +491,18 @@ case "$cmd" in
       $([ "$report" = 1 ] || echo --no-check) || rc=$?
     [ "$rc" = 3 ] && exit 0        # use_acct already said it was live; that is not a failure
     exit "$rc"
+    ;;
+  tray)
+    mode=run
+    for a in "$@"; do
+      case "$a" in
+        --install) mode=install ;;
+        --stop)    mode=stop ;;
+        --status)  mode=status ;;
+        *)         die "tray: unknown option '$a' (try: ccex tray -h)" ;;
+      esac
+    done
+    tray "$mode"
     ;;
   rm)
     [ $# -ge 1 ] || die "usage: ccex rm <name>"

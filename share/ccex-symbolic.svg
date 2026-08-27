@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ccex: two accounts trading places, at 16px on a panel -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <g fill="#ffffff">
+    <path d="M1 4h8V1.5L13.5 5 9 8.5V6H1z"/>
+    <path d="M15 12H7v2.5L2.5 11 7 7.5V10h8z"/>
+  </g>
+</svg>

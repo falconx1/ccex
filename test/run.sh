@@ -108,6 +108,11 @@ t  "numbers are assigned"        "1"                    "$CCEX" ls
 t  "ls <account> reads one"      "b@example.com"        "$CCEX" ls bee
 t  "ls never launches"           "90% used"             "$CCEX" ls a@example.com
 
+json_rows() { "$CCEX" ls "$@" --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'; }
+t  "ls --json is every account"  "3"                    json_rows
+t  "ls <account> --json is one"  "1"                    json_rows bee
+t  "ls --json carries the email" '"email": "b@example.com"' "$CCEX" ls bee --json
+
 echo "switching"
 t  "use by name"                 "b@example.com -> live" "$CCEX" use bee --no-check
 t  "use by number"               "-> live"               "$CCEX" use 3 --no-check
@@ -980,8 +985,13 @@ t  "an eta to the cap"             "50m"                 burn_says eta
 t  "a window that resets first"    "resets first"        burn_says resets
 t  "a reset does not read as negative" "36%/h"           burn_says backwards
 
+echo "the top bar"
+t  "tray says how to start it"   "ccex tray --install"  "$CCEX" tray --status
+t  "tray rejects unknown flags"  "unknown option"       "$CCEX" tray --nope
+exits "tray --nope exits 1"      1                      "$CCEX" tray --nope
+
 echo "help"
-for c in ls use rotate pool add run env record; do
+for c in ls use rotate pool add run env record tray; do
   t "ccex $c -h" "ccex $c" "$CCEX" "$c" -h
 done
 exits "unknown command exits 1"  1                       "$CCEX" bogus
