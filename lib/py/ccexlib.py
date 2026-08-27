@@ -8,6 +8,9 @@ import datetime, json, os, re, time
 BASE = os.environ.get("CCEX_BASE") or os.path.expanduser("~/.claude")
 ROOT = os.environ.get("CCEX_ROOT") or os.path.expanduser("~/.claude-profiles")
 USAGE_DIR = os.path.join(ROOT, ".usage")
+STEP = os.path.join(USAGE_DIR, ".step")       # what a switch is doing, while it is doing it
+LOG = os.path.join(USAGE_DIR, "rotate.log")   # and afterwards, whether it switched or not
+STEPS = 5                                     # lines of trail the view has room for
 
 
 def load(path):
@@ -451,3 +454,40 @@ def hm(sec):
     if sec >= 86400:
         return "%dd %dh%02dm" % (sec // 86400, sec % 86400 // 3600, sec % 3600 // 60)
     return "%dh%02dm" % (sec // 3600, sec % 3600 // 60) if sec >= 3600 else "%dm" % (sec // 60)
+
+
+def step(msg, log=True):
+    """Add a line to what rotation is doing, for the live view to show. None clears it.
+
+    A switch that asks three accounts spends most of a minute doing it, and until it is over
+    the only thing the view can honestly say is "now" -- which looks identical to a view that
+    has stopped. One line per thing done, in order, so the view can print the trail without
+    parsing anything.
+
+    The same lines go to rotate.log, because `lib/background.sh` only records a tick that
+    changed the live account -- so a tick that spent three sessions asking and then stayed
+    put left no trace of having asked at all.
+    """
+    try:
+        if not msg:
+            if os.path.exists(STEP):
+                os.remove(STEP)
+            return
+        os.makedirs(USAGE_DIR, exist_ok=True)
+        try:
+            with open(STEP) as f:
+                had = [l for l in f.read().splitlines() if l.strip()]
+        except OSError:
+            had = []
+        with open(STEP, "w") as f:
+            f.write("\n".join((had + [msg])[-STEPS:]) + "\n")
+        if log:
+            with open(LOG, "a") as f:      # O_APPEND, so the tick's own line cannot interleave
+                f.write("%s  ccex: %s\n" % (
+                    datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg))
+    except OSError:
+        pass
+
+
+def reads(a):
+    return "%d%% 5h / %d%% weekly" % (a["five"] or 0, a["seven"] or 0)

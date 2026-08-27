@@ -6,7 +6,7 @@ slower --every tick, and only that tick walks /proc or asks systemd anything. No
 here starts a session unless --refresh says it may, and then off the render loop, so the
 view never freezes waiting for one.
 """
-import os, re, select, shutil, subprocess, sys, termios, threading, time, tty
+import os, re, select, shutil, subprocess, sys, tempfile, termios, threading, time, tty
 
 import burn
 from ccexlib import ROOT, USAGE_DIR, fresh, hm, id_for, save, slots
@@ -57,9 +57,17 @@ def handover(old, cmd):
 
 
 def run_lines(cmd, timeout=180):
-    """Run something that switches accounts, and hand back the lines it had to say."""
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    return [l for l in (out.stdout + out.stderr).splitlines() if l.strip()]
+    """Run something that switches accounts, and hand back the lines it had to say.
+
+    Into a temporary file rather than a pipe. A pipe belongs to this process: if the view
+    goes away mid-switch -- restarting into new code, or killed -- the read end closes and
+    the switch dies of a broken pipe with the credential half moved. A file has no reader to
+    lose, so the child finishes whatever it was doing either way.
+    """
+    with tempfile.TemporaryFile("w+", errors="replace") as f:
+        subprocess.run(cmd, stdout=f, stderr=f, timeout=timeout)
+        f.seek(0)
+        return [l for l in f.read().splitlines() if l.strip()]
 
 
 def hms(sec):
@@ -427,8 +435,23 @@ class View:
             hdr.add("CHECKED", REV, 9)
         L.append(hdr)
 
+        # What rotation is doing right now, one line per thing done, printed below everything
+        # else and gone the moment the next switch starts its own. A switch that asks three
+        # accounts takes most of a minute, and "now" on its own reads like a frozen view.
+        # Anything older than a few minutes is a tick that died without clearing up.
+        trail, age = [], 0
+        try:
+            age = now - os.path.getmtime(os.path.join(USAGE_DIR, ".step"))
+            if age < 300:
+                with open(os.path.join(USAGE_DIR, ".step")) as f:
+                    trail = [l.strip() for l in f.read().splitlines() if l.strip()]
+        except OSError:
+            pass
+
         shown = self.rows
-        room = height - 9 - (1 if self.switches else 0)
+        # The trail is charged to the same height the accounts come out of, so a switch grows
+        # the frame by nothing and the view does not scroll out from under itself.
+        room = height - 9 - (1 if self.switches else 0) - (len(trail) + 1 if trail else 0)
         if len(shown) > room > 0:
             keep = [a for a in shown if a["name"] == "default"][:1]
             shown = (keep + [a for a in shown if a not in keep])[:room]
@@ -515,16 +538,6 @@ class View:
 
         t = self.timer
         rot = Line().add(" rotation     ", BOLD)
-        # What rotation is doing right now, one line per thing done. A switch that asks three
-        # accounts takes most of a minute, and "now" on its own reads like a frozen view.
-        # Anything older than a few minutes is a tick that died without clearing up.
-        trail, p = [], os.path.join(USAGE_DIR, ".step")
-        try:
-            if now - os.path.getmtime(p) < 300:
-                with open(p) as f:
-                    trail = [l.strip() for l in f.read().splitlines() if l.strip()]
-        except OSError:
-            pass
         if t["active"]:
             rot.add("rotating on data change", GREEN)
             # When the next read is due. The daemon also wakes on a data change, so it can
@@ -549,11 +562,6 @@ class View:
         if self.note:
             rot.add("  %s" % self.note, DIM)
         L.append(rot)
-        for i, one in enumerate(trail):
-            last = i == len(trail) - 1
-            L.append(Line().add("              ", "")
-                     .add(("-> " if last else "   "), GREY)
-                     .add(one, YELLOW if last else GREY))
 
         if self.switches:
             L.append(Line().add(" rotated      ", BOLD)
@@ -590,6 +598,15 @@ class View:
             keys.add("q", REV).add(" quit   ")
             keys.add("up %s" % hm(now - self.started), GREY)
         L.append(keys)
+
+        if trail:
+            L.append(Line().add(" switching    ", BOLD)
+                     .add(hm_short(int(age)) + " ago", GREY))
+            for i, one in enumerate(trail):
+                last = i == len(trail) - 1
+                L.append(Line().add("              ", "")
+                         .add(("-> " if last else "   "), GREY)
+                         .add(one, YELLOW if last else GREY))
         return [l.render(width, colour) for l in L]
 
 
@@ -637,7 +654,7 @@ def serve(v):
                     f.write("%s\nccex: %s\n" % (time.strftime("%F %T"), v.message))
             except OSError:
                 pass
-        if v.mtime() != v.stamp:
+        if v.mtime() != v.stamp and not v.busy:
             print("ccex: ccex was updated; restarting into it", flush=True)
             return 0                   # Restart=always brings it straight back, on new code
         time.sleep(v.every)
@@ -775,7 +792,11 @@ def main():
             if time.time() - v.sampled >= v.every:
                 v.sample()
                 v.maybe_act()
-                if v.mtime() != v.stamp:  # ccex changed under us: restart into the new code
+                # ccex changed under us: restart into the new code -- but not while a
+                # switch is running in the background. Replacing this process closes the
+                # pipes its child is writing to, and the child dies on its next line, half
+                # way through moving a credential. It restarts on the next tick instead.
+                if v.mtime() != v.stamp and not v.busy:
                     sys.stdout.write("\033[?25h\033[?1049l")
                     sys.stdout.flush()
                     if old:

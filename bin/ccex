@@ -67,7 +67,7 @@ does. Piped to a file it prints plain frames instead of drawing.
 U
 ;;
     use) cat <<'U'
-ccex use <account> [-n|--dry-run] [--no-check] [--no-report]
+ccex use <account> [-n|--dry-run] [--no-check] [--no-report] [--anyway]
 
 Hand the live ~/.claude slot to <account> and park whoever was there. <account> is the
 number from `ccex ls`, a slot name, a full email, or any unambiguous prefix — `ccex use 3`
@@ -76,13 +76,16 @@ is the quickest.
   -n, --dry-run   say what would move, write nothing
   --no-check      neither ask the account first nor report afterwards
   --no-report     ask, but print no table -- what the live view switches with
+  --anyway        switch to it even if it turns out to have no room
 
 Sessions you already have open follow the switch.
 
-The account you name is asked what it has left before the slot moves, so a switch onto one
-with no room says so while it is still a keystroke away instead of surfacing as a puzzling
-rotation a minute later. It moves either way -- you named it. The report afterwards reads
-that same answer, so this costs one session, not two.
+The account you name is asked what it has left before the slot moves -- the same reading
+rotation takes, through the same code, into the same trail the live view shows. If it comes
+back spent, the slot goes to the next account with room instead and says so: naming an
+account is not an instruction to sit at 93% while the daemon moves off it seconds later.
+`--anyway` is how you say you meant it. The report afterwards reads that same answer, so
+this costs one session, not two.
 U
 ;;
   rotate) cat <<'U'
@@ -405,11 +408,12 @@ case "$cmd" in
     ;;
   use)
     [ $# -ge 1 ] || die "usage: ccex use <account> [--dry-run] [--no-check] [--no-report]"
-    check=1; report=1; dry=0; target=
+    check=1; report=1; dry=0; anyway=0; target=
     for a in "$@"; do
       case "$a" in
         --no-check)     check=0; report=0 ;;
         --no-report)    report=0 ;;   # ask, but keep the table out of a TUI
+        --anyway)       anyway=1 ;;   # a spent account, on purpose
         -n|--dry-run)   dry=1 ;;
         -*)             die "use: unknown option '$a' (try: ccex use -h)" ;;
         *)              [ -n "$target" ] && die "use takes one account, got '$target' and '$a'"; target=$a ;;
@@ -421,20 +425,15 @@ case "$cmd" in
       exit 0
     fi
     # Ask the account you named what it has left before the slot moves, not after: a switch
-    # onto a spent account is worth knowing about while it is still a keystroke away. The dry
-    # run resolves the name first, so an account that does not exist reports once rather than
-    # twice, and `ccex use <the account already live>` does not fork a session behind the
-    # session you are typing in. Rotation does its own asking, so this is only for a switch
-    # you typed.
-    if [ "$check" = 1 ]; then
-      pre=$(use_acct "$target" --dry-run 2>&1) || pre=''
-      case "$pre" in
-        ''|*"already live"*) ;;
-        *) limits --quiet --force "$target" >/dev/null || true ;;
-      esac
-    fi
+    # onto a spent account is worth knowing about while it is still a keystroke away. It is
+    # `use_acct` that does it, through the same `ask()` rotation uses, so it happens after the
+    # name has been resolved -- an account that does not exist reports once, one already live
+    # forks no session behind the session you are typing in, and the live view sees the same
+    # trail either way.
     rc=0
-    do_use "$target" $([ "$report" = 1 ] || echo --no-check) || rc=$?
+    do_use "$target" $([ "$check" = 1 ] && echo --ask) \
+      $([ "$anyway" = 1 ] && echo --anyway) \
+      $([ "$report" = 1 ] || echo --no-check) || rc=$?
     [ "$rc" = 3 ] && exit 0        # use_acct already said it was live; that is not a failure
     exit "$rc"
     ;;

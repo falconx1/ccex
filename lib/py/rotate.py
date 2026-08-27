@@ -1,7 +1,7 @@
 """Print rotation's decision as one tab-separated line for `lib/rotate.sh`. Reads `ccex ls --json`."""
-import datetime, json, os, sys, time
+import json, os, sys, time
 
-from ccexlib import USAGE_DIR, hold_auto, load, save, slots
+from ccexlib import USAGE_DIR, hm, hold_auto, load, reads, save, slots, step
 from decide import FIVE_AT, FIVE_HOUR, WEEKLY_AT, cap, decide, ranked
 
 accounts = json.load(sys.stdin)
@@ -16,8 +16,6 @@ TRIES = 3           # candidates to ask directly before going with what we alrea
 CURRENT = 300       # numbers this recent are worth nothing extra to re-ask for
 NEAR = 5            # percentage points below the cap that count as about to switch
 AHEAD = os.path.join(USAGE_DIR, ".readahead.json")   # what was already read for this window
-STEP = os.path.join(USAGE_DIR, ".step")              # what is happening, while it is happening
-LOG = os.path.join(USAGE_DIR, "rotate.log")          # and afterwards, whether it switched or not
 skip = set()        # candidates this run has ruled out, so re-deciding does not offer them again
 
 
@@ -59,46 +57,6 @@ def plan():
                   at, blind=verify and not dry) + (retired,)
 
 
-STEPS = 5           # lines of trail the view has room for
-
-
-def step(msg, log=True):
-    """Add a line to what rotation is doing, for the live view to show. None clears it.
-
-    A switch that asks three accounts spends most of a minute doing it, and until it is over
-    the only thing the view can honestly say is "now" -- which looks identical to a view that
-    has stopped. One line per thing done, in order, so the view can print the trail without
-    parsing anything.
-
-    The same lines go to rotate.log, because `lib/background.sh` only records a tick that
-    changed the live account -- so a tick that spent three sessions asking and then stayed
-    put left no trace of having asked at all.
-    """
-    try:
-        if not msg:
-            if os.path.exists(STEP):
-                os.remove(STEP)
-            return
-        os.makedirs(USAGE_DIR, exist_ok=True)
-        try:
-            with open(STEP) as f:
-                had = [l for l in f.read().splitlines() if l.strip()]
-        except OSError:
-            had = []
-        with open(STEP, "w") as f:
-            f.write("\n".join((had + [msg])[-STEPS:]) + "\n")
-        if log:
-            with open(LOG, "a") as f:      # O_APPEND, so the tick's own line cannot interleave
-                f.write("%s  ccex: %s\n" % (
-                    datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg))
-    except OSError:
-        pass
-
-
-def reads(a):
-    return "%d%% 5h / %d%% weekly" % (a["five"] or 0, a["seven"] or 0)
-
-
 # An account that has spent its week comes off the list, and only `ccex pool in` puts it
 # back. This is the one place it happens: the view predicts, the daemon delegates here.
 verdict, target, message, retired = plan()
@@ -111,11 +69,19 @@ verdict, target, message, retired = plan()
 # invent a first reading for an account nothing has ever measured. Both of those are worth a
 # session -- but only for the one account about to be used, and only at the moment it is.
 if verify and not dry:
-    from probe import probe                # importing it is what makes a session possible
+    from ask import ask                   # importing it is what makes a session possible
     from usage import account_json
 
     dirs, checked, notes, unasked = dict(slots()), [], [], []
-    step(None)                    # this tick's trail is its own
+    if verdict == "SWITCH":
+        # Only a tick that is actually moving writes a trail. This block runs on every tick,
+        # so an unguarded step() here says "out of room" on the ticks that stayed put, and
+        # clears the read-ahead trail the STAY path below just wrote.
+        step(None)                # this switch's trail is its own
+        live = next((a for a in accounts if a["name"] == "default"), None)
+        if live:
+            step("%s is out of room at %s, looking for an account with some" % (
+                live["name"], reads(live)))
     while verdict == "SWITCH" and target not in checked and len(checked) < TRIES:
         checked.append(target)
         row = next((a for a in accounts if a["name"] == target), None)
@@ -124,14 +90,17 @@ if verify and not dry:
         blind = row["five"] is None or row["seven"] is None
         current = row.get("live") or (row.get("age_s") is not None and row["age_s"] < CURRENT)
         if current and not blind:
-            break                          # measured moments ago; there is nothing to ask
+            # Nothing to ask, but the view should still be told why: this is the common case,
+            # and a trail that appears only when a session is opened looks like no trail.
+            step("%s reads %s, measured %s ago -- no need to ask" % (
+                target, reads(row), hm(row["age_s"]) if row.get("age_s") else "moments"))
+            break
         was = None if blind else reads(row)      # "0%" would claim a reading there never was
-        step("asking %s%s" % (target, "" if was is None else " (on file: %s)" % was))
-        st = probe(dirs[target])
+        st, got = ask(target, dirs[target], was, lambda: account_json(target, dirs[target]),
+                      ", leaving it out" if blind else ", trying the next")
         if st == "ok":
-            row = account_json(target, dirs[target])
+            row = got
             accounts[[a["name"] for a in accounts].index(target)] = row
-            step("%s answered %s" % (target, reads(row)))
             if was is None:
                 notes.append("%s reads %s, measured for the first time" % (target, reads(row)))
             elif reads(row) != was:
@@ -140,7 +109,6 @@ if verify and not dry:
             # Never measured and it could not be measured now: there is nothing to fall back
             # on, so it leaves the running altogether rather than being guessed at.
             skip.add(target)
-            step("%s could not be measured (%s), leaving it out" % (target, st))
             notes.append("%s has never been measured and could not be asked (%s)" % (target, st))
         else:
             # Could not be asked is not the same as has no room -- but an account that can be
@@ -149,7 +117,6 @@ if verify and not dry:
             # where none of them can be asked, below.
             skip.add(target)
             unasked.append(target)
-            step("%s did not answer (%s), trying the next" % (target, st))
             notes.append("%s could not be asked (%s), so trying the next account" % (target, st))
         verdict, target, message, more = plan()
         retired += more
@@ -204,21 +171,19 @@ if verify and not dry and verdict == "STAY":
         done = asked_since(cand, since) or \
             (tried.get("name") == cand["name"] and (tried.get("at") or 0) >= since)
         if not done:
-            from probe import probe
+            from ask import ask
             from usage import account_json
             os.makedirs(USAGE_DIR, exist_ok=True)
             save(AHEAD, {"name": cand["name"], "at": time.time()})   # before, so a crash counts
             step(None)                # this read is its own trail
             step("nearly at the cap, reading %s ahead of the switch" % cand["name"])
-            st = probe(dirs[cand["name"]])
+            n = cand["name"]
+            st, row = ask(n, dirs[n], after=lambda: account_json(n, dirs[n]))
             if st == "ok":
-                row = account_json(cand["name"], dirs[cand["name"]])
-                step("%s answered %s" % (cand["name"], reads(row)))
                 message += "; %s reads %d%% 5h / %d%% weekly, read ahead of the switch" % (
-                    cand["name"], row["five"] or 0, row["seven"] or 0)
+                    n, row["five"] or 0, row["seven"] or 0)
             else:
-                step("%s did not answer (%s)" % (cand["name"], st))
-                message += "; %s could not be read ahead of the switch (%s)" % (cand["name"], st)
+                message += "; %s could not be read ahead of the switch (%s)" % (n, st)
 
 if retired:
     message += "; out of the pool until `ccex pool in`: " + ", ".join(dict.fromkeys(retired))

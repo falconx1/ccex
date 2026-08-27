@@ -2,12 +2,15 @@
 import os, shutil, sys, time
 
 from ccexlib import (BASE, ROOT, canon, cfg_for, creds_for, email_for, expand, held,
-                     id_for, load, logged_in, note_switch, save, seed_into)
-from decide import FIVE_AT, cap
+                     id_for, load, logged_in, note_switch, reads, save, seed_into, step)
+from decide import FIVE_AT, cap, own, ranked
 from usage import account_json, cached
 
 target = expand(sys.argv[1])
 dry = "--dry-run" in sys.argv[2:] or "-n" in sys.argv[2:]
+asking = "--ask" in sys.argv[2:]
+anyway = "--anyway" in sys.argv[2:]
+TRIES = 3           # accounts to read before giving up, the same bound rotation uses
 
 def slot(d):
     "credential path, config path, email"
@@ -54,15 +57,78 @@ def taken(d):
 # What the account you named actually has left. `ccex use` moves the slot either way -- you
 # named it, so it goes -- but a switch onto an account with no room is worth a word before it
 # happens rather than a puzzling rotation a minute later.
+#
+# Against the account's own cap where it has one, and otherwise against the threshold the
+# daemon is really running at -- not the built-in default. Warning about 90% while the daemon
+# moves off at 80% would stay quiet about exactly the switch it is about to undo.
 row = account_json(src_name, src_dir)
-over = [w for k, w in (("five", "5h"), ("seven", "weekly"))
-        if row[k] is not None and row[k] >= cap(row, k, FIVE_AT)]
+running = load(os.path.join(ROOT, ".usage", "daemon.json")).get("at")
+at = int(running) if str(running or "").isdigit() else FIVE_AT
+
+
+def no_room(a):
+    """Which of this account's windows are spent, against its own cap where it has one."""
+    return ["%s over %s" % (w, own(a, k, at)) for k, w in (("five", "5h"), ("seven", "weekly"))
+            if a[k] is not None and a[k] >= cap(a, k, at)]
+
+
+if asking and not dry:
+    # The same reading rotation does before it moves, done here for the same reason, through
+    # the same ask(), written to the same trail -- a switch you pressed a key for should show
+    # its working in the view exactly like one a timer started.
+    #
+    # And the same answer to a spent destination: hand over to the next account with room.
+    # Naming an account is not an instruction to sit at 93%; the daemon would move off it
+    # seconds later, which is the bounce all of this exists to stop. `--anyway` is the way to
+    # say you meant it.
+    from ask import ask
+    step(None)                        # this switch's trail is its own
+    step("switching to %s by hand, reading it first" % src_name)
+    tried = set()
+    while True:
+        was = None if row["five"] is None else reads(row)
+        st, got = ask(src_name, src_dir, was, lambda: account_json(src_name, src_dir),
+                      ", going by what is on file")
+        tried.add(src_name)
+        if st == "ok":
+            row = got
+        spent = no_room(row)
+        if not spent or anyway or len(tried) >= TRIES:
+            break
+        rows = [account_json("default", BASE)] + \
+               [account_json(n, d) for n, (d, e) in parked.items() if n not in tried]
+        # Not the account that is already live: a slot left behind by an earlier park still
+        # holds its credential, so ranking can offer you the account you are on, and the
+        # switch would come back "already live; nothing moved".
+        nxt = next((a for a in ranked(rows, at) if a["name"] in parked
+                    and a["email"].lower() != (live_email or "").lower()), None)
+        if nxt is None:
+            step("%s has no room (%s) and nothing else does either" % (src_name, spent[0]))
+            sys.exit("ccex: %s is at %d%% 5h / %d%% weekly, %s - and no other account has room, "
+                     "so nothing moved (`ccex use %s --anyway` switches anyway)"
+                     % (src_email, row["five"] or 0, row["seven"] or 0,
+                        " and ".join(spent), target))
+        step("%s has no room (%s), reading %s instead" % (src_name, spent[0], nxt["name"]))
+        print("ccex: %s is at %d%% 5h / %d%% weekly, %s - handing over to %s instead "
+              "(`ccex use %s --anyway` switches to it regardless)"
+              % (src_email, row["five"] or 0, row["seven"] or 0, " and ".join(spent),
+                 nxt["email"], target), file=sys.stderr)
+        src_name = nxt["name"]
+        src_dir, src_email = parked[src_name]
+        if held(src_dir):
+            sys.exit("ccex: %s is held out of the pool" % src_email)
+        row = account_json(src_name, src_dir)
+
+over = no_room(row)
 if over:
-    print("ccex: %s is at %d%% 5h / %d%% weekly, over %s - rotation will move off it again"
+    print("ccex: %s is at %d%% 5h / %d%% weekly, %s - rotation will move off it again"
           % (src_email, row["five"] or 0, row["seven"] or 0, " and ".join(over)), file=sys.stderr)
 elif row["five"] is None:
     print("ccex: nothing has measured %s; its numbers arrive once it reports" % src_email,
           file=sys.stderr)
+
+if asking and not dry:
+    step("switching to %s" % src_name, log=False)
 
 base_name = canon(live_email) if live_email else "previous"
 park_name, n = base_name, 1

@@ -362,6 +362,7 @@ out=$("$CCEX" rotate --at 80 2>&1)
 t  "with nothing answering it says so"        "none of them could be asked" echo "$out"
 t  "and falls back to the numbers on file"    "b@example.com"        live_email
 rlog() { cat "$CC_PROFILE_ROOT/.usage/rotate.log" 2>&1; }
+step_trail() { cat "$CC_PROFILE_ROOT/.usage/.step" 2>/dev/null || echo nothing; }
 t  "the log records the probe starting"       "asking bee"           rlog
 t  "and how it went"                          "did not answer"       rlog
 
@@ -369,6 +370,20 @@ teardown; setup
 age_numbers
 out=$("$CCEX" rotate --at 80 -n 2>&1)
 absent "a dry run asks nothing"              "could not be asked" echo "$out"
+
+teardown; setup                 # the trail a switch writes is its own, not the last one's
+age_numbers
+printf 'asking zzz\n' > "$CC_PROFILE_ROOT/.usage/.step"
+"$CCEX" rotate --at 80 >/dev/null 2>&1
+absent "a new switch clears the old trail" "asking zzz"        step_trail
+t      "and writes its own instead"       "asking"             step_trail
+
+teardown; setup                 # a tick that stays put has no story to tell
+age_numbers
+out=$("$CCEX" rotate --at 99 2>&1)
+t      "staying put still says so"           "staying put"        echo "$out"
+absent "and writes no trail"                 "out of room"        step_trail
+absent "nor a line to the log"               "out of room"        rlog
 
 # An account nothing has measured is invisible to ranking, so it can never be the candidate
 # that gets checked -- unless being unmeasured is itself allowed to reach the check.
@@ -556,14 +571,48 @@ spend_five cee 95
 fake_claude '{"c@example.com": [95, 30]}'
 age_numbers
 out=$("$CCEX" use cee 2>&1)
-t  "it asks the account before moving"      "1"               calls
-t  "and warns that it has no room"          "over 5h"         echo "$out"
-t  "but it still moves, because you said so" "c@example.com"  live_email
+t  "it asks the account before moving"      "asking cee"      rlog
+t  "and says it has no room"                "5h over 90%"     echo "$out"
+t  "so it hands over to one that has"       "b@example.com"   echo "$out"
+t  "and that is where it lands"             "b@example.com"   live_email
+t  "the trail says why it moved on"         "no room"         step_trail
+
+teardown; setup                 # --anyway means you meant it: the spent account goes live
+spend_five cee 95
+fake_claude '{"c@example.com": [95, 30]}'
+age_numbers
+out=$("$CCEX" use cee --anyway 2>&1)
+t  "--anyway takes the spent account"       "c@example.com"   live_email
+t  "and still says what it read"            "5h over 90%"     echo "$out"
+t  "asking only the account you named"      "1"               calls
 
 teardown; setup                 # naming the account already live must not start a session
 fake_claude '{"a@example.com": [90, 40]}'
 "$CCEX" use a >/dev/null 2>&1 || true
 t  "the live account is not asked behind you" "0"             calls
+
+teardown; setup                 # under the default 90 but over its own 60: still no room
+spend_five cee 70
+"$CCEX" pool cap cee --5h 60 >/dev/null 2>&1
+fake_claude '{"c@example.com": [70, 30]}'
+age_numbers
+out=$("$CCEX" use cee 2>&1)
+t  "an own cap counts, not just the default" "over its own 60%"  echo "$out"
+absent "and the default is not quoted"       "over 90%"          echo "$out"
+
+teardown; setup                 # a switch you pressed a key for writes the same trail
+fake_claude '{"b@example.com": [10, 20]}'
+age_numbers
+"$CCEX" use bee >/dev/null 2>&1
+t  "a typed switch leaves a trail"          "by hand"            step_trail
+t  "saying it asked the account"            "asking bee"         step_trail
+t  "and what came back"                     "bee answered"       step_trail
+
+teardown; setup                 # --no-check asks nothing, so it has nothing to say
+fake_claude '{"b@example.com": [10, 20]}'
+age_numbers
+"$CCEX" use bee --no-check >/dev/null 2>&1
+absent "asking nothing writes no trail"     "by hand"            step_trail
 
 teardown; setup                 # bee has room, so there is nothing to warn about
 fake_claude '{"b@example.com": [10, 20]}'
@@ -854,6 +903,16 @@ t  "and what it had on file"               "10% 5h"             frame 99
 t  "every action on its own line"          "trying the next"    frame 99
 t  "with the newest one marked"            "-> switching to cee" frame 99
 matches "one line each, in order" 'asking bee.*\n.*did not answer.*\n.*switching to cee' frame 99
+trail_pos() {                   # it belongs under the whole view, not inside it
+  local out k s
+  out=$(frame 99 2>&1)
+  k=$(printf '%s\n' "$out" | grep -n ' keys ' | head -1 | cut -d: -f1)
+  s=$(printf '%s\n' "$out" | grep -n 'asking bee' | head -1 | cut -d: -f1)
+  if [[ -n $k && -n $s && $s -gt $k ]]; then echo below
+  else echo "not below (keys=$k trail=$s)"; fi
+}
+t  "the trail prints below the view"      "below"              trail_pos
+t  "and says how long ago it ran"        "switching    "       frame 99
 touch -d '10 minutes ago' "$CC_PROFILE_ROOT/.usage/.step"
 absent "a trail nobody cleared goes stale" "asking bee"  frame 99
 rm -f "$CC_PROFILE_ROOT/.usage/.step"

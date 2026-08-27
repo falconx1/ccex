@@ -28,12 +28,16 @@ use_acct() { py use "$@"; }   # move a parked account's credential into the live
 
 do_use() {   # the one way an account becomes live; returns 3 if nothing actually moved
   local target=$1 check=1 before after a; shift
-  local flags=()
+  local flags=() pass=()
   for a in "$@"; do
-    case "$a" in --no-check) check=0 ;; *) flags+=("$a") ;; esac
+    case "$a" in
+      --no-check) check=0 ;;
+      --ask|--anyway) pass+=("$a") ;;   # for use_acct, not for the report afterwards
+      *)          flags+=("$a") ;;
+    esac
   done
   before=$(live_email)
-  with_lock use_acct "$target" || return $?   # no such account, both slots busy, ...
+  with_lock use_acct "$target" ${pass[@]+"${pass[@]}"} || return $?   # no such account, both slots busy, ...
   after=$(live_email)
   [ "$before" = "$after" ] && return 3
   link_shared_all
