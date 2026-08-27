@@ -21,6 +21,27 @@ def load(path):
 _cached = {}
 CFG_KEYS = ("oauthAccount", "cachedUsageUtilization")   # all anyone reads from a .claude.json
 
+SEED_KEYS = ("hasCompletedOnboarding", "lastOnboardingVersion", "lastReleaseNotesSeen", "theme",
+             "installMethod", "autoUpdates", "respectGitignore", "tipsHistory", "hasSeenTasksHint",
+             "showExpandedTodos", "copyOnSelect", "migrationVersion", "hasIdeOnboardingBeenShown")
+
+
+def seed_into(dst, src):
+    """Copy the non-account config -- onboarding, theme, folder trust -- into a profile.
+
+    Folder trust is the load-bearing part: `limits.probe` has to start claude in a directory
+    this slot already trusts, or the TUI stops on the trust dialog and no number ever comes
+    back. Nothing here is overwritten, so seeding an already-seeded profile changes nothing.
+    """
+    for k in SEED_KEYS:
+        if k in src and k not in dst:
+            dst[k] = src[k]
+    proj = dst.setdefault("projects", {})
+    for k, v in (src.get("projects") or {}).items():
+        proj.setdefault(k, v)
+    return len(proj)
+
+
 
 def fresh(path, keep=None):
     """load(), but only re-parsed when the file has actually changed.

@@ -2,7 +2,7 @@
 import os, shutil, sys, time
 
 from ccexlib import (BASE, ROOT, canon, cfg_for, creds_for, email_for, expand, held,
-                     id_for, load, logged_in, note_switch, save)
+                     id_for, load, logged_in, note_switch, save, seed_into)
 from usage import cached
 
 target = expand(sys.argv[1])
@@ -85,6 +85,11 @@ pkcfg = load(pk_cfg)
 for k in ("oauthAccount", "userID", "cachedUsageUtilization"):
     if k in lcfg:
         pkcfg[k] = lcfg[k]
+# cm:edge protocol -> lib/py/limits.py — probe() needs a trusted dir in this slot's own
+# config. A slot that hands its login away is deleted, so the seed `add` gave it is gone by
+# the time rotation parks the account again; without re-seeding here, every parked account
+# answers "untrusted" and can never be measured.
+seed_into(pkcfg, lcfg)
 save(pk_cred, pk)
 save(pk_cfg, pkcfg)
 

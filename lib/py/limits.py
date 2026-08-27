@@ -136,6 +136,25 @@ else:
         targets.append(hit[0])
 
 rows, notes = [], []
+
+
+def stalest_parked():
+    """The one parked account this run may measure, or None.
+
+    Rotation picks from what it can see, and nothing reports for an account no session is
+    running -- so without this a freshly added account stays invisible for good. One per
+    run, stalest first: each probe is a real session, and `ccex ls` over eleven accounts
+    must not become eleven of them. Repeated runs fill the pool in, oldest first.
+    """
+    if not max_age:
+        return None
+    old = [(cached(d)["fetchedAtMs"] or 0, d) for _, d in targets if not is_base(d)]
+    old = [(ms, d) for ms, d in old if not ms or time.time() - ms / 1000 > max_age]
+    return min(old)[1] if old else None
+
+
+measure = stalest_parked()
+
 for name, d in targets:
     have = cached(d)
     age_s = time.time() - have["fetchedAtMs"] / 1000 if have["fetchedAtMs"] else None
@@ -147,6 +166,8 @@ for name, d in targets:
         st = "ok"                      # someone checked moments ago; no reason to ask again
     elif have["fetchedAtMs"] and not still_counting(d) and not force:
         st = "ok"                      # every window it knew about has since reset, so 0% is certain
+    elif d is measure:
+        st = probe(d)                  # nothing reports for a parked account; go and look
     elif not is_base(d):
         st = "parked"                  # not the account you are running; leave it alone until it is
     elif live_sessions(d) and not force:
