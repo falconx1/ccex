@@ -33,7 +33,7 @@ With no account, every account as one row each:
   CHECKED   how old those numbers are; `live` means a session is reporting now
 
 Reads files only — never starts a session, however stale the numbers are, unless you
-ask with --force. Name an account to get its two windows in full instead, with clock
+ask with --force, which asks the account itself even when it is parked. Name an account to get its two windows in full instead, with clock
 times: `ccex ls work`.
 
 -w keeps the table on screen, htop-style: the reset clocks count down every second,
@@ -47,6 +47,7 @@ it needs a few minutes of readings before it can say.
   --refresh 15m allow one real check when nothing has reported for that long (off by
                 default, and never while the background daemon is doing it)
   --rotate      switch here, not just report it, when the live account is out of room
+  --no-verify   predict, and switch, on the numbers already on file; see `ccex rotate -h`
 
   up/down  move the selection, enter switches to it
   right    take it out of the rotation pool, left puts it back
@@ -73,9 +74,14 @@ number from `ccex ls`, a slot name, a full email, or any unambiguous prefix — 
 is the quickest.
 
   -n, --dry-run   say what would move, write nothing
-  --no-check      skip the limits report afterwards
+  --no-check      neither ask the account first nor report afterwards
 
 Sessions you already have open follow the switch.
+
+The account you name is asked what it has left before the slot moves, so a switch onto one
+with no room says so while it is still a keystroke away instead of surfacing as a puzzling
+rotation a minute later. It moves either way -- you named it. The report afterwards reads
+that same answer, so this costs one session, not two.
 U
 ;;
   rotate) cat <<'U'
@@ -86,6 +92,7 @@ onto whichever account has the most usable room. With no flag it does that once,
 
   --at N        percentage that counts as out of room (default 80)
   -n            plan only, write nothing
+  --no-verify   switch on the numbers already on file, without asking the account first
 
 An account with a cap of its own uses that instead of --at, in both directions -- see
 `ccex pool -h`.
@@ -110,9 +117,29 @@ Candidates must be under --at on both windows. Among those, ranking is by what t
 usage costs: used% x (time left in window / window length), 5-hour first, weekly as
 the tie-break. Rotating once exits 1 if every account is spent.
 
-Running in the background never starts a session to poll: it decides from what your
-running sessions already report, and reads nothing but files to do it. It runs while
-you are logged in; `loginctl enable-linger $USER` to keep it running when you are not.
+Before the slot changes hands, the account being moved to is asked what it actually has
+left -- one short session on it, a few seconds. Nothing reports for a parked account, so
+its numbers are as old as the last time it was live, and an account spent somewhere else
+in the meantime reads as free until something asks it. An account that turns out to have
+no room is passed over for the next candidate; one that cannot be asked at all is still
+switched to, on the numbers already on file, and the line says so.
+
+Because the check exists, an account nothing has measured can be a candidate too, behind
+every account that has been -- otherwise ranking, which needs numbers, could never reach
+one. That is the one case where a failed check skips the account instead of using it: there
+is nothing to fall back on. `--no-verify` skips the asking, and drops unmeasured accounts
+with it; `-n` never asks.
+
+Nothing is checked on a timer. A window past its reset reads 0% without asking anyone, so
+the countdown keeps stale numbers honest for free. What does happen before a switch happens
+near it, measured in usage rather than in time: once either of the live account's windows is
+within 5 points of its cap, the account it would move to is read then -- so the ranking that
+picks it is working from numbers worth trusting. That happens at most once per 5-hour window,
+and a read that failed counts, so it cannot turn into a tick-by-tick check.
+
+Deciding never starts a session: it reads what your running sessions already report, and
+nothing but files. It runs while you are logged in; `loginctl enable-linger $USER` to keep
+it running when you are not.
 U
 ;;
     record) cat <<'U'
@@ -243,7 +270,7 @@ case "$cmd" in
           --every|--refresh) [ $# -ge 2 ] || die "$1 needs a duration like 5s"
                              wargs+=("$1" "$(secs "$2")"); shift ;;
           --at)       [ $# -ge 2 ] || die "--at needs a percentage"; wargs+=(--at "$2"); shift ;;
-          --rotate|--once) wargs+=("$1") ;;
+          --rotate|--once|--no-verify) wargs+=("$1") ;;
           *)          die "ls: '$1' is not a --watch option (try: ccex ls -h)" ;;
         esac
         shift
@@ -364,7 +391,7 @@ case "$cmd" in
         --log)    mode=log ;;
         --stop)   mode=stop ;;
         --tick)   mode=tick ;;      # what the timer runs: rotate once, then write the log
-        --at|--every|--refresh|--max-age|-n|--dry-run|--no-launch)
+        --at|--every|--refresh|--max-age|-n|--dry-run|--no-launch|--no-verify)
                   rest+=("$a") ;;
         -*)       die "rotate: unknown option '$a' (try: ccex rotate -h)" ;;
         *)        rest+=("$a") ;;
@@ -388,6 +415,19 @@ case "$cmd" in
     if [ "$dry" = 1 ]; then
       use_acct "$target" --dry-run
       exit 0
+    fi
+    # Ask the account you named what it has left before the slot moves, not after: a switch
+    # onto a spent account is worth knowing about while it is still a keystroke away. The dry
+    # run resolves the name first, so an account that does not exist reports once rather than
+    # twice, and `ccex use <the account already live>` does not fork a session behind the
+    # session you are typing in. Rotation does its own asking, so this is only for a switch
+    # you typed.
+    if [ "$check" = 1 ]; then
+      pre=$(use_acct "$target" --dry-run 2>&1) || pre=''
+      case "$pre" in
+        ''|*"already live"*) ;;
+        *) limits --quiet --force "$target" >/dev/null || true ;;
+      esac
     fi
     rc=0
     do_use "$target" $([ "$check" = 1 ] || echo --no-check) || rc=$?

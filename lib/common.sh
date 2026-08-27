@@ -20,7 +20,11 @@ with_lock() {   # the daemon and an interactive switch must not interleave
   # be holding the lock from the first time. flock is per descriptor, so a nested call would
   # wait on a lock this process already has -- CCEX_LOCK_HELD is what makes it a no-op.
   ( export CCEX_LOCK_HELD=1
-    flock -w 20 9 || die "another ccex is switching accounts; try again in a moment"
+    # Long enough to sit out a switch that asks the account it is moving to first: up to
+    # three of those, a session each. Waiting beats failing, because the thing being waited
+    # for is the same switch this command wanted.
+    flock -w "${CCEX_LOCK_WAIT:-60}" 9 || \
+      die "another ccex is switching accounts; try again in a moment"
     "$@" ) 9>"$ROOT/.lock"
 }
 

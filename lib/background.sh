@@ -8,12 +8,13 @@ bg_running() {   # is anything already rotating in the background: the daemon, o
 
 monitor() {
   local sub=${1:-status}; shift || true
-  local at=90 every= refresh=0 rsec age=()   # 90 is decide.py's FIVE_AT
+  local at=90 every= refresh=0 rsec age=() verify=()   # 90 is decide.py's FIVE_AT
   while [ $# -gt 0 ]; do
     case "$1" in
       --at)    [ $# -ge 2 ] || die "--at needs a percentage"; at=$2; shift 2 ;;
       --every) [ $# -ge 2 ] || die "--every needs a duration like 5s"; every=$2; shift 2 ;;
       --refresh) [ $# -ge 2 ] || die "--refresh needs a duration like 15m"; refresh=$2; shift 2 ;;
+      --no-verify) verify=(--no-verify); shift ;;   # never ask the account it moves to
       *)       die "unknown option '$1'" ;;
     esac
   done
@@ -28,7 +29,7 @@ monitor() {
       local before after out rc ts log
       log="$ROOT/.usage/rotate.log"
       before=$(live_email)
-      out=$(rotate --at "$at" --no-launch ${age[@]+"${age[@]}"} 2>&1) && rc=0 || rc=$?
+      out=$(rotate --at "$at" --no-launch ${age[@]+"${age[@]}"} ${verify[@]+"${verify[@]}"} 2>&1) && rc=0 || rc=$?
       after=$(live_email)
       ts=$(date '+%F %T')
       printf '%s\n%s\n' "$ts" "$out" > "$ROOT/.usage/.monitor-last"
@@ -69,11 +70,12 @@ monitor() {
       while :; do
         if [ "$(stamp)" != "$stamp" ]; then     # ccex changed on disk; a loop this long-lived should not run stale code
           printf 'ccex: reloading, ccex was updated\n'
-          exec "$CCEX_BIN" rotate --watch --every "$every" --at "$at" --refresh "$refresh"
+          exec "$CCEX_BIN" rotate --watch --every "$every" --at "$at" --refresh "$refresh" \
+            ${verify[@]+"${verify[@]}"}
         fi
         out=
         if ! bg_running; then
-          out=$(rotate --at "$at" --no-launch ${age[@]+"${age[@]}"} 2>&1) || true
+          out=$(rotate --at "$at" --no-launch ${age[@]+"${age[@]}"} ${verify[@]+"${verify[@]}"} 2>&1) || true
           case "$out" in
             *"staying put"*) out= ;;                 # the boring case; the row below says it
             *) printf '%s\n' "$out" ;;              # nowhere to go, or something broke
@@ -93,7 +95,7 @@ monitor() {
       ;;
     serve)
       exec python3 "$CCEX_PY/watch.py" --serve --at "$at" --every "$(secs "$every")" \
-        --refresh "$rsec"
+        --refresh "$rsec" ${verify[@]+"${verify[@]}"}
       ;;
     install)
       local claude_dir=
@@ -111,7 +113,7 @@ RestartSec=10
 Nice=5
 Environment=PATH=$claude_dir%h/.local/bin:/usr/local/bin:/usr/bin:/bin${CC_PROFILE_ROOT:+
 Environment=CC_PROFILE_ROOT=$CC_PROFILE_ROOT}
-ExecStart=$CCEX_BIN rotate --serve --at $at --every $every --refresh $refresh
+ExecStart=$CCEX_BIN rotate --serve --at $at --every $every --refresh $refresh${verify[0]+ ${verify[0]}}
 
 [Install]
 WantedBy=default.target

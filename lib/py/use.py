@@ -3,7 +3,8 @@ import os, shutil, sys, time
 
 from ccexlib import (BASE, ROOT, canon, cfg_for, creds_for, email_for, expand, held,
                      id_for, load, logged_in, note_switch, save)
-from usage import cached
+from decide import FIVE_AT, cap
+from usage import account_json, cached
 
 target = expand(sys.argv[1])
 dry = "--dry-run" in sys.argv[2:] or "-n" in sys.argv[2:]
@@ -50,6 +51,19 @@ def taken(d):
         return True
     return logged_in(d) and email_for(d).lower() != (live_email or "").lower()
 
+# What the account you named actually has left. `ccex use` moves the slot either way -- you
+# named it, so it goes -- but a switch onto an account with no room is worth a word before it
+# happens rather than a puzzling rotation a minute later.
+row = account_json(src_name, src_dir)
+over = [w for k, w in (("five", "5h"), ("seven", "weekly"))
+        if row[k] is not None and row[k] >= cap(row, k, FIVE_AT)]
+if over:
+    print("ccex: %s is at %d%% 5h / %d%% weekly, over %s - rotation will move off it again"
+          % (src_email, row["five"] or 0, row["seven"] or 0, " and ".join(over)), file=sys.stderr)
+elif row["five"] is None:
+    print("ccex: nothing has measured %s; its numbers arrive once it reports" % src_email,
+          file=sys.stderr)
+
 base_name = canon(live_email) if live_email else "previous"
 park_name, n = base_name, 1
 while taken(os.path.join(ROOT, park_name)):
@@ -89,9 +103,7 @@ save(pk_cred, pk)
 save(pk_cfg, pkcfg)
 
 # What the outgoing account was reading, before its numbers are parked with it.
-leaving = (cached(BASE)["utilization"] or {})
-note_switch(live_email, *[(leaving.get(k) or {}).get("utilization")
-                          for k in ("five_hour", "seven_day")])
+note_switch(live_email, cached(BASE)["utilization"] or {})
 
 lc["claudeAiOauth"] = sc["claudeAiOauth"]
 for k in ("oauthAccount", "userID", "cachedUsageUtilization"):

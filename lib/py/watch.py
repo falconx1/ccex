@@ -143,9 +143,10 @@ def meter(pct, limit, width=10, colour=True):
 
 
 class View:
-    def __init__(self, every=10, at=FIVE_AT, refresh=0, act=False, at_given=False):
+    def __init__(self, every=10, at=FIVE_AT, refresh=0, act=False, at_given=False,
+                 verify=True):
         self.every, self.at, self.refresh, self.act = every, at, refresh, act
-        self.at_given = at_given
+        self.at_given, self.verify = at_given, verify
         self.started = time.time()
         self.rows, self.live = [], None
         self.verdict, self.message = "", ""
@@ -238,7 +239,9 @@ class View:
         self.timer = self.systemd()
         if not self.at_given and self.timer["at"]:
             self.at = int(self.timer["at"])   # the daemon's threshold is the one that will fire
-        self.verdict, _, self.message = decide(rows, self.at)
+        # `blind` has to match the tick's, or this view predicts NONE while the tick
+        # switches to an account nothing has measured. Verification is what reads it.
+        self.verdict, _, self.message = decide(rows, self.at, blind=self.verify)
         self.live = next((a for a in rows if a["name"] == "default"), None)
         if self.live:
             if self.last_live and self.last_live != self.live["email"]:
@@ -254,7 +257,8 @@ class View:
         The view never moves a credential itself. Deciding twice is cheap, and the second
         decision is the authoritative one: `rotate` holds the lock across it.
         """
-        return [CCEX, "rotate", "--tick", "--at", str(self.at), "--refresh", str(self.refresh)]
+        return [CCEX, "rotate", "--tick", "--at", str(self.at), "--refresh", str(self.refresh)] \
+            + ([] if self.verify else ["--no-verify"])
 
     def maybe_act(self):
         """Act on what the last sample said, if this view is the one doing the acting."""
@@ -297,7 +301,9 @@ class View:
         account waiting for it (needs none). The second always answers, so a view with no
         history yet still tells you where you are going.
         """
-        live, room = self.live, ranked(self.rows, self.at)
+        # Same ranking rotation will use, `blind` included, or the account named here is
+        # not the one the switch goes to.
+        live, room = self.live, ranked(self.rows, self.at, blind=self.verify)
         dest = room[0] if room else None
         if not live:
             return None, None, dest, "no live account"
@@ -484,9 +490,14 @@ class View:
         to = Line().add("              ", "")
         if dest:
             to.add("-> ", GREY).add("%s %s" % (dest["id"], dest["email"]), GREEN + BOLD)
-            to.add(" at %d%% 5h / %d%% weekly" % (dest["five"], dest["seven"]))
-            if dest["age_s"] and dest["age_s"] > 900:
-                to.add(" (numbers %dm old)" % (dest["age_s"] // 60), GREY)
+            if dest["five"] is None or dest["seven"] is None:
+                # Reached only once every measured account is spent. There is no percentage
+                # to draw, and the switch reads it before landing on it.
+                to.add(", which nothing has measured yet", GREY)
+            else:
+                to.add(" at %d%% 5h / %d%% weekly" % (dest["five"], dest["seven"]))
+                if dest["age_s"] and dest["age_s"] > 900:
+                    to.add(" (numbers %dm old)" % (dest["age_s"] // 60), GREY)
         elif self.verdict != "SWITCH":
             to.add("no account is under its cap right now", RED)
         if resets_first and best:
@@ -597,6 +608,7 @@ def serve(v):
 def main():
     argv = sys.argv[1:]
     every, at, refresh, act, once = 10, FIVE_AT, 0, False, "--once" in argv
+    verify = "--no-verify" not in argv
     at_given = False
     for i, a in enumerate(argv):
         if a == "--every" and i + 1 < len(argv):
@@ -608,10 +620,10 @@ def main():
         elif a == "--rotate":
             act = True
     if "--serve" in argv:
-        v = View(every, at, refresh, False, at_given)
+        v = View(every, at, refresh, False, at_given, verify)
         v.serving = True
         return serve(v)
-    v = View(every, at, refresh, act, at_given)
+    v = View(every, at, refresh, act, at_given, verify)
     v.sample()
 
     tty_in, tty_out = sys.stdin.isatty(), sys.stdout.isatty()

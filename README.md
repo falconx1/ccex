@@ -100,7 +100,21 @@ ccex: limits for ada@acme.example (live, from the running session)
         weekly  18% used, resets 26-08 04:59 (18h49m)
 ```
 
-Pass `--no-check` to `use` if you'd rather it stayed quiet.
+That answer is read **before** the slot moves, not after. A switch onto an account with no
+room left is worth knowing about while it is still a keystroke away, rather than surfacing a
+minute later as a rotation you didn't ask for:
+
+```console
+$ ccex use dev-team011
+ccex: dev_team011@jimdrive.com is at 100% 5h / 62% weekly, over 5h - rotation will move off it again
+ccex: ada@example.com -> parked as 'ada'; dev_team011@jimdrive.com -> live
+```
+
+It still moves — you named it, and holding an account you asked for is not this tool's
+business. The report afterwards reads the same answer, so asking first costs one session
+rather than two. Rotation does its own asking, so this belongs only to a switch you typed.
+
+Pass `--no-check` to `use` if you'd rather it neither asked nor reported.
 
 ### Watching it, live
 
@@ -236,10 +250,79 @@ If every other account is over the threshold too, it stays put, tells you which 
 frees up soonest, and exits 1 — so `ccex rotate` is a usable cron or `/loop` line that
 only makes noise when there's genuinely nowhere to go.
 
-Parked numbers can be out of date, and rotation leans on them. That mostly self-corrects:
-switching runs a real check on the account it just made live, so if the true numbers come
-back over the threshold, the next `ccex rotate` moves again. What it can't see is an
-account being spent from another machine — `--refresh` is what catches that.
+Parked numbers can be out of date, and eligibility leans on them. Nothing reports for an
+account that isn't running, so its numbers are as old as the last time it was live — hours,
+on a day of rotating. While an account sits parked nothing here can spend it, so old
+numbers are a safe over-estimate of what it has used; what they can't see is that account
+being spent **somewhere else**, which reads as free.
+
+So before the slot changes hands, the account being moved to is asked directly: one short
+session on it, a few seconds, exactly what `ccex ls <account> --force` does. This is worth
+what it costs — on the machine this was built for, `ccex ls` believed an account was at 85%
+of its 5-hour window while the account itself reported **100%**. Under the stale figure it
+was eligible, and rotation would have landed on an account with no room at all.
+
+```console
+$ ccex rotate --at 50
+ccex: ada@example.com is at 60% 5h / 17% weekly (5h over 50%), so -> ada@acme.example at 3% 5h / 43% weekly
+      ; ada-work reads 95% 5h / 62% weekly checked just now, not 0%/6%
+ccex: ada-work -> ada@acme.example -> live
+```
+
+An account that turns out to have no room is passed over for the next candidate, up to
+three. One that **can't** be asked — no `claude` to launch, no folder it trusts, a check
+that times out — is still switched to, on the numbers already on file, and the line says
+so: broken check machinery must not quietly empty the pool. A profile that has never been
+live has trusted no folders, so it has nowhere to be launched; the trust already granted in
+the live account's config is copied over for it, which is what `ccex add` seeds a new
+profile with anyway.
+
+Because the check exists, an account **nothing has ever measured** can be a candidate too —
+ranked behind every account that has been, so it is only reached for once the measured ones
+are out of room, which is also the only moment it is worth a session to go and read one.
+Without that it could never be reached at all: ranking needs numbers, so an unmeasured
+account would never be chosen, never be checked, and stay invisible for good. This is the
+one case where a failed check means the account is **skipped** rather than used anyway —
+there are no numbers to fall back on, and landing on windows nobody has read would be a
+worse guess than the stale ones this is here to replace. `--no-verify` therefore drops
+unmeasured accounts from the running: with nothing going to read them first, being
+unmeasured has to keep them out.
+
+Nothing checks accounts on a timer, and nothing needs to. A window whose reset time has
+passed reads 0% by arithmetic, so the countdown keeps stale numbers honest on its own — for
+free, for every parked account at once. What it cannot do is see an hour spent on that
+account from another machine, or invent a first reading. Those are worth a session, and only
+for the one account about to be used.
+
+**Near the switch, not on a schedule.** Nearness is a usage distance, not a clock: how far
+the live account's percentage is from the point that will move it. Once *either* window is
+within 5 points of its cap — the week counts, and often trips first — the account it would
+move to is read *then*. When the cap is finally crossed, the switch is a file copy with no
+session held open inside the lock.
+
+Reading ahead happens **at most once per live 5-hour window**, and that bound is what keeps
+it from becoming a timer. A read that *failed* counts as a read for this purpose — otherwise
+an account that cannot be read would be re-asked every tick, which is the timer none of this
+is supposed to be. Sitting at 88% for an hour asks once, not once a tick.
+
+What reading ahead is worth is mostly a **better decision**, not a saved session. Ranking
+picks the cheapest account from the numbers on file, and those numbers are what go wrong —
+one of the accounts here read 85% while the account itself said 100%, which made a spent
+account look like the best candidate. Reading it while the switch is still approaching fixes
+the ranking before it is used. The switch that follows still asks for itself unless the
+read-ahead landed within the last five minutes; a reading from earlier in the same window
+can be hours old, which is the staleness being checked for, so the window is far too wide to
+count as fresh.
+
+The one case that re-arms is a window sitting inside the band for days, which the week can
+do: once per 5-hour window, so at worst about five sessions a day while a switch is genuinely
+imminent. `NEAR` in `lib/py/rotate.py` is the knob, and `--no-verify` turns the whole thing
+off.
+
+`--no-verify` switches on the numbers on file without asking, and `-n` never asks. The
+answer is filed the same way any other reading is, so an account that has been asked once
+is also recognisable afterwards — see [Live numbers from your
+statusline](#live-numbers-from-your-statusline).
 
 ### Leaving it running
 
@@ -299,7 +382,15 @@ want.
 Two things can decide to switch at once — the daemon and a `ccex use` you type, or a
 `ccex ls -w --rotate` you left open. They can't collide: the view stands down entirely
 while the daemon is active, and a switch takes an `flock` either way, so the second one to
-arrive re-decides under the lock and finds there is nothing left to do.
+arrive re-decides under the lock and finds there is nothing left to do. A switch that asks
+the account it is moving to first holds that lock for a session or three, so the wait is a
+minute rather than the seconds a plain switch needs — long enough to sit it out, because
+what the second command is waiting for is the switch it wanted anyway.
+
+The view and the switch run the same `decide()` on the same numbers, so what the monitor
+predicts is what the tick does — including whether accounts nobody has measured are in the
+running, which depends on whether anything is going to read them first. `--no-verify`
+therefore changes both together, or neither.
 
 ### Keeping an account out of it
 
@@ -444,10 +535,11 @@ account and its windows haven't run out yet — which is what `ccex use` walks i
 you start working. Once a session is running, its statusline answers everything.
 
 Nothing is launched for an account whose windows have all expired, parked or live: the
-answer is already 0%, and it stays 0% until a session reports otherwise. Parked accounts
-are never launched at all — their numbers sit at whatever they were when that account was
-last live, ticking down as their windows expire, and get a real check the moment you
-`ccex use` them. If a session is already open on the live account but you haven't installed the recorder,
+answer is already 0%, and it stays 0% until a session reports otherwise. A parked account
+is not launched on its own account either — its numbers sit at whatever they were when it
+was last live, ticking down as their windows expire. Two things ask one directly, and both
+are things you asked for: `ccex ls <account> --force`, and rotation checking the account it
+is about to move to. If a session is already open on the live account but you haven't installed the recorder,
 `ccex` shows slightly old numbers rather than starting a second session behind your back —
 that holds even past `--refresh`, so the promise has no exception.
 
@@ -484,11 +576,20 @@ nothing, and the line that undoes it is printed. The hand-written equivalent is 
 `"command": "ccex record"` on its own works too — it emits nothing, so Claude Code shows no
 statusline, but the recording still happens.
 
-A render that arrives just after a switch is the one case this can get wrong: the session
-still carries the old account's limits, while `.claude.json` already names the new one. So
-the numbers being left behind are written down at switch time and dropped if they turn up
-again, which costs at most one skipped render on the rare occasion two accounts read
-exactly alike.
+A render that arrives just after a switch is the one case this has to get right: the
+session still carries the old account's limits, while `.claude.json` already names the new
+one, so filing them would credit someone else's spent hour to the account you just moved
+to — and `ccex rotate` would move straight off it again.
+
+Two things say whose numbers a payload is carrying, because the payload itself does not.
+A weekly window comes back at the same point in every week for the same account, so that
+point identifies it however far the percentages have moved since; the accounts' own points
+are learned from what Claude Code caches per account in `.claude.json`, which it tags with
+the account it fetched for, and kept in `~/.claude-profiles/.anchors.json`. Failing that —
+an account nothing has measured yet has no point — the numbers left behind at each switch
+in the last half hour are written down and recognised if they turn up again. Recognised
+either way, the render is skipped; a reading already filed against the wrong account is not
+believed when it is read back either.
 
 Each account also gets a small ring of `(time, 5h%, weekly%)` samples next to its
 snapshot — appended only when a number actually moves, capped at 200 — which is where
@@ -497,8 +598,8 @@ it costs nothing but the estimate until the next two readings land.
 
 It writes at most once every 15 seconds per account, into `~/.claude-profiles/.usage/`,
 and costs about 7ms on the renders where it does nothing. Numbers are filed under the
-account the session is billing at the time it renders, which is why they stay right across
-a switch.
+account whose numbers they are rather than under whoever is live, which is why they stay
+right across a switch.
 
 ## Reading `ccex ls`
 
@@ -590,9 +691,10 @@ lib/background.sh     the systemd service, the foreground watch, and one tick
 lib/py/ccexlib.py     paths, JSON read/write, slots, numbers, the pool -- imported by the rest
 lib/py/use.py         the credential handover, the one place accounts move
 lib/py/usage.py       reading the two windows: session, cache, clock -- no launching
-lib/py/limits.py      the usage engine on top of that, including the pty probe
+lib/py/probe.py       the one thing that costs a session: the pty probe, and folder trust for it
+lib/py/limits.py      the usage engine on top of that
 lib/py/decide.py      which account to move to, and why -- shared by rotate and the view
-lib/py/rotate.py      that decision as one line for the shell
+lib/py/rotate.py      that decision as one line for the shell, once the target is verified
 lib/py/burn.py        how fast a window is climbing, and when it hits its cap
 lib/py/watch.py       `ccex ls -w`: the live table with the monitor folded in
 lib/py/record.py      statusline payload in, limits snapshot out

@@ -6,8 +6,8 @@ live. Both read them through here, so they never disagree.
 """
 import datetime, os, time
 
-from ccexlib import (BASE, CFG_KEYS, caps, cfg_for, email_for, fresh, held, held_auto, hm,
-                     logged_in, snap_path)
+from ccexlib import (BASE, CFG_KEYS, caps, cfg_for, email_for, foreign_report, fresh, held,
+                     held_auto, hm, logged_in, snap_path)
 
 GRACE = 60          # a window inside its last minute has effectively already rolled over
 _walk = (0.0, {})   # the last /proc walk, and when
@@ -62,6 +62,11 @@ def cached(d):
     if c.get("accountUuid") and c["accountUuid"] != (cfg.get("oauthAccount") or {}).get("accountUuid"):
         c = {}                     # left behind by whoever held this slot before
     snap = fresh(snap_path(email_for(d)))
+    # Numbers a session filed here while it was still signed in as another account. The
+    # week point says so however old the reading is, so a slot that was mis-credited
+    # before falls back to what Claude Code cached for it rather than staying wrong.
+    if foreign_report(email_for(d), snap.get("utilization") or {}, window=0):
+        snap = {}
     sources = [(snap.get("fetchedAtMs") or 0, snap.get("utilization") or {}, "session"),
                (c.get("fetchedAtMs") or 0, c.get("utilization") or {}, "cache")]
     sources.sort(key=lambda x: -x[0])

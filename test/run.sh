@@ -28,17 +28,27 @@ def account(dir_, cfg, email, five, seven):
                 "utilization": {
                     "five_hour": {"utilization": five,
                                   "resets_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00",
-                                               time.gmtime(time.time() + 3600))},
+                                               time.gmtime(FIVE_AT[email]))},
                     "seven_day": {"utilization": seven,
                                   "resets_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00",
-                                               time.gmtime(time.time() + 86400))}}}})
+                                               time.gmtime(WEEK_AT[email]))}}}})
+# An account's weekly window comes back at its own point in the week, and no two here share
+# one: that point is how ccex tells whose numbers a statusline is carrying. Their 5-hour
+# windows differ too -- that one does not identify an account for long, but it does not
+# drift while it is open, so it says which account a lagging render is still reporting.
+EMAILS = ("a@example.com", "b@example.com", "c@example.com")
+WEEK_AT = {e: int(time.time()) + 86400 + n * 3600 for n, e in enumerate(EMAILS)}
+FIVE_AT = {e: int(time.time()) + 3600 + n * 600 for n, e in enumerate(EMAILS)}
 account(h + "/.claude", h + "/.claude.json", "a@example.com", 90, 40)
 account(h + "/.claude-profiles/bee", h + "/.claude-profiles/bee/.claude.json", "b@example.com", 10, 20)
 account(h + "/.claude-profiles/cee", h + "/.claude-profiles/cee/.claude.json", "c@example.com", 50, 30)
+json.dump({"week": WEEK_AT, "five": FIVE_AT}, open(h + "/resets.json", "w"))
 PY
 }
 
 teardown() { [ -n "${HOME:-}" ] && [ "${HOME#/tmp/}" != "$HOME" ] && rm -rf "$HOME"; }
+
+live_email() { "$CCEX" ls | awk '/\*/ {print $4}'; }
 
 t() {   # t <name> <expected substring> <command...>
   local name=$1 want=$2; shift 2
@@ -248,14 +258,263 @@ absent "a dry run retires nothing" "a@example.com"          bash -c '"$1" rotate
 teardown; setup                 # a's week is untouched here: only its 5-hour window is spent
 absent "a spent 5h window does not retire" "a@example.com"  bash -c '"$1" rotate --at 45 --no-launch >/dev/null 2>&1; cat "$2/.pool.json" 2>/dev/null' _ "$CCEX" "$CC_PROFILE_ROOT"
 
+echo "verifying before the switch"
+# probe() launches the real TUI; this stands in for it, writing what /usage would have
+# refreshed and exiting. Nothing else in the suite needs a `claude` on PATH.
+fake_claude() {
+  mkdir -p "$HOME/fakebin"
+  cat > "$HOME/fakebin/claude" <<'FAKE'
+#!/usr/bin/env bash
+printf 'x' >> "$HOME/fake-calls"
+python3 - <<'PY'
+import json, os, time
+d = os.environ.get("CLAUDE_CONFIG_DIR")
+cfg = os.path.join(d, ".claude.json") if d else os.path.expanduser("~/.claude.json")
+c = json.load(open(cfg))
+email = (c.get("oauthAccount") or {}).get("emailAddress")
+say = json.load(open(os.path.expanduser("~/fake-usage.json"))).get(email)
+if say:
+    def when(secs):
+        return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() + secs))
+    u = c.setdefault("cachedUsageUtilization", {
+        "accountUuid": (c.get("oauthAccount") or {}).get("accountUuid"),
+        "utilization": {"five_hour": {"resets_at": when(3600)},
+                        "seven_day": {"resets_at": when(2 * 86400)}}})
+    u["fetchedAtMs"] = int(time.time() * 1000)
+    u["utilization"]["five_hour"]["utilization"] = say[0]
+    u["utilization"]["seven_day"]["utilization"] = say[1]
+    json.dump(c, open(cfg, "w"))
+PY
+FAKE
+  chmod +x "$HOME/fakebin/claude"
+  PATH="$HOME/fakebin:$PATH"
+  # a profile with no trusted folder cannot be launched in, so the live config gets one
+  # for `borrow_trust` to copy over -- which is the path a never-live profile takes.
+  python3 -c 'import json,sys
+c = json.load(open(sys.argv[1]))
+c["projects"] = {sys.argv[2]: {"hasTrustDialogAccepted": True}}
+json.dump(c, open(sys.argv[1], "w"))' "$HOME/.claude.json" "$HOME"
+  printf '%s' "$1" > "$HOME/fake-usage.json"
+  : > "$HOME/fake-calls"
+}
+
+calls() { wc -c < "$HOME/fake-calls" | tr -d ' '; }   # how many sessions the fake ran
+
+age_numbers() {   # nothing reports for a parked account, so its numbers are hours old
+  python3 -c 'import glob, json, sys, time
+for cfg in glob.glob(sys.argv[1] + "/*/.claude.json"):
+    c = json.load(open(cfg))
+    if "cachedUsageUtilization" not in c:
+        continue                     # nothing measured here; there is no age to set
+    c["cachedUsageUtilization"]["fetchedAtMs"] = int((time.time() - 3600) * 1000)
+    json.dump(c, open(cfg, "w"))' "$CC_PROFILE_ROOT"
+}
+
+teardown; setup                 # a is live at 90/40; bee reads 10/20 on file, 95 for real
+fake_claude '{"b@example.com": [95, 20], "c@example.com": [5, 30]}'
+age_numbers
+out=$("$CCEX" rotate --at 80 2>&1)
+t  "a candidate with no room is passed over" "> c@example.com" echo "$out"
+t  "and that account really is live now"     "c@example.com"   live_email
+t  "and the line says what it really read"   "95% 5h"          echo "$out"
+t  "it seeded the trust it needed"           "seeded folder trust" echo "$out"
+
+teardown; setup                 # this time bee really does have room
+fake_claude '{"b@example.com": [12, 20]}'
+age_numbers
+out=$("$CCEX" rotate --at 80 2>&1)
+t  "a verified candidate is switched to"     "b@example.com"   echo "$out"
+t  "and its checked numbers are reported"    "12% 5h"          echo "$out"
+
+teardown; setup
+fake_claude '{"b@example.com": [95, 20]}'
+age_numbers
+out=$("$CCEX" rotate --at 80 --no-verify 2>&1)
+t  "--no-verify asks nothing"                "b@example.com"   echo "$out"
+absent "and reports no check"                "checked just now" echo "$out"
+
+teardown; setup                 # no `claude` to launch at all
+age_numbers
+out=$("$CCEX" rotate --at 80 2>&1)
+t  "an account that cannot be asked is still used" "b@example.com"        echo "$out"
+t  "and the line admits it was not checked"        "could not be checked" echo "$out"
+
+teardown; setup
+age_numbers
+out=$("$CCEX" rotate --at 80 -n 2>&1)
+absent "a dry run asks nothing"              "could not be checked" echo "$out"
+
+# An account nothing has measured is invisible to ranking, so it can never be the candidate
+# that gets checked -- unless being unmeasured is itself allowed to reach the check.
+spend_live() {   # spend_live five|seven <pct>: move the live account's own window
+  python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+w = {"five": "five_hour", "seven": "seven_day"}[sys.argv[2]]
+c["cachedUsageUtilization"]["utilization"][w]["utilization"] = int(sys.argv[3])
+json.dump(c, open(sys.argv[1], "w"))' "$HOME/.claude.json" "$1" "$2"
+}
+
+spend_five() {   # put an account's 5-hour window near the end of itself
+  python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+c["cachedUsageUtilization"]["utilization"]["five_hour"]["utilization"] = int(sys.argv[2])
+json.dump(c, open(sys.argv[1], "w"))' "$CC_PROFILE_ROOT/$1/.claude.json" "$2"
+}
+
+unmeasure() {   # wipe every reading for one account, as a freshly added one has none
+  python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+c.pop("cachedUsageUtilization", None)
+json.dump(c, open(sys.argv[1], "w"))' "$CC_PROFILE_ROOT/$1/.claude.json"
+  rm -f "$CC_PROFILE_ROOT/.usage/$2"
+}
+
+teardown; setup                 # bee has no numbers at all; cee is spent, so bee is all there is
+unmeasure bee b_example_com.json
+spend_five cee 95
+t  "an unmeasured account is not reached blind" "every other account is too" \
+   "$CCEX" rotate --at 80 --no-verify
+fake_claude '{"b@example.com": [7, 11]}'
+age_numbers
+out=$("$CCEX" rotate --at 80 2>&1)
+t  "but the check can reach it"              "b@example.com"   live_email
+t  "and it lands with real numbers"          "7% 5h"           echo "$out"
+t  "said to be a first measurement"          "first time"      echo "$out"
+
+teardown; setup                 # bee is the only candidate, and nothing can read it
+unmeasure bee b_example_com.json
+spend_five cee 95
+age_numbers
+out=$("$CCEX" rotate --at 80 2>&1)
+absent "an unmeasured account it cannot read is not used" "b@example.com" live_email
+t  "and it says why"                         "never been measured" echo "$out"
+
+teardown; setup                 # cee has room and is measured, so bee is never asked
+unmeasure bee b_example_com.json
+fake_claude '{"c@example.com": [50, 30]}'
+age_numbers
+out=$("$CCEX" rotate --at 80 2>&1)
+t  "a measured account wins over an unmeasured one" "c@example.com"  live_email
+absent "and the unmeasured one is not asked"        "b@example.com"  echo "$out"
+
+teardown; setup                 # a is live at 90%; at --at 93 it is inside the 5-point band
+unmeasure bee b_example_com.json
+spend_five cee 95
+fake_claude '{"b@example.com": [7, 11]}'
+age_numbers
+out=$("$CCEX" rotate --at 93 2>&1)
+t  "near the cap it does not switch"        "is at 90%"       echo "$out"
+t  "but it reads the next account first"    "read ahead"      echo "$out"
+t  "and files real numbers for it"          "7% 5h"           echo "$out"
+out=$("$CCEX" rotate --at 93 2>&1)
+absent "reading ahead does not repeat"      "read ahead"      echo "$out"
+
+teardown; setup                 # read ahead at 93, then cross the cap moments later
+unmeasure bee b_example_com.json
+spend_five cee 95
+fake_claude '{"b@example.com": [7, 11]}'
+age_numbers
+"$CCEX" rotate --at 93 >/dev/null 2>&1              # inside the band, so it reads ahead
+t  "reading ahead took one session"            "1"              calls
+out=$("$CCEX" rotate --at 80 2>&1)                  # now over it: the switch itself
+t  "the switch goes through on what it read"   "b@example.com"  live_email
+t  "and asks nothing more, being seconds old"  "1"              calls
+
+teardown; setup                 # no reset time for the live window: nothing to bound it by
+unmeasure bee b_example_com.json
+spend_five cee 95
+fake_claude '{"b@example.com": [7, 11]}'
+age_numbers
+python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+c["cachedUsageUtilization"]["utilization"]["five_hour"].pop("resets_at", None)
+json.dump(c, open(sys.argv[1], "w"))' "$HOME/.claude.json"
+out=$("$CCEX" rotate --at 93 2>&1)
+absent "with no window to bound it, it reads nothing ahead" "read ahead" echo "$out"
+t  "and still says where it stands"            "a@example.com"  echo "$out"
+
+teardown; setup                 # 5h is nowhere near, but the week is: that is what will trip
+unmeasure bee b_example_com.json
+spend_five cee 95
+spend_live five 28
+spend_live seven 96
+fake_claude '{"b@example.com": [7, 11]}'
+age_numbers
+out=$("$CCEX" rotate --at 90 2>&1)
+t  "a near weekly window still stays put"         "staying put" echo "$out"
+t  "but the week reads ahead as well"             "read ahead"  echo "$out"
+
+teardown; setup                 # nothing can read bee, and asking again would be a timer
+unmeasure bee b_example_com.json
+spend_five cee 95
+age_numbers
+out=$("$CCEX" rotate --at 93 2>&1)
+t  "a read-ahead that fails says so"        "could not be read ahead" echo "$out"
+out=$("$CCEX" rotate --at 93 2>&1)
+absent "and is not attempted again"         "could not be read ahead" echo "$out"
+
+teardown; setup                 # 90% against a 99% cap is four points too far away
+unmeasure bee b_example_com.json
+spend_five cee 95
+fake_claude '{"b@example.com": [7, 11]}'
+age_numbers
+absent "far from the cap it reads nothing"  "read ahead" \
+   "$CCEX" rotate --at 99
+absent "and --no-verify never reads ahead"  "read ahead" \
+   "$CCEX" rotate --at 93 --no-verify
+
+teardown; setup                 # the view predicts; the tick acts. They must say the same thing
+unmeasure bee b_example_com.json
+spend_five cee 95
+t  "the view offers the unmeasured account too"  "nothing has measured yet" \
+   "$CCEX" ls -w --once --at 80
+t  "and without the check it does not"           "every other account is too" \
+   "$CCEX" ls -w --once --at 80 --no-verify
+
+echo "a switch you typed"
+teardown; setup                 # cee is spent; naming it anyway must say so before it moves
+spend_five cee 95
+fake_claude '{"c@example.com": [95, 30]}'
+age_numbers
+out=$("$CCEX" use cee 2>&1)
+t  "it asks the account before moving"      "1"               calls
+t  "and warns that it has no room"          "over 5h"         echo "$out"
+t  "but it still moves, because you said so" "c@example.com"  live_email
+
+teardown; setup                 # naming the account already live must not start a session
+fake_claude '{"a@example.com": [90, 40]}'
+"$CCEX" use a >/dev/null 2>&1 || true
+t  "the live account is not asked behind you" "0"             calls
+
+teardown; setup                 # bee has room, so there is nothing to warn about
+fake_claude '{"b@example.com": [10, 20]}'
+age_numbers
+out=$("$CCEX" use bee 2>&1)
+absent "a switch with room warns about nothing" "rotation will move off" echo "$out"
+t  "and it lands"                            "b@example.com"  live_email
+teardown; setup                 # --no-check means neither the asking nor the report
+fake_claude '{"b@example.com": [10, 20]}'
+age_numbers
+out=$("$CCEX" use bee --no-check 2>&1)
+t  "--no-check asks nothing at all"          "0"              calls
+absent "and reports nothing either"          "limits for"     echo "$out"
+t  "but it still switches"                   "b@example.com"  live_email
+
 echo "a late render after a switch"
 teardown; setup                 # a is live at 90/40; bee, once live, is at 10/20
 "$CCEX" use bee --no-check >/dev/null 2>&1
 snap="$CC_PROFILE_ROOT/.usage/b_example_com.json"
+reset_at() {   # reset_at week|five <account>: when that account's window comes back
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]][sys.argv[3]])' \
+    "$HOME/resets.json" "$1" "$2@example.com"
+}
+week_at() { reset_at week "$1"; }
 render() {   # a statusline payload, as Claude Code hands it to `ccex record`
   rm -f "$CC_PROFILE_ROOT/.usage/.stamp-default"      # the 15s throttle is not under test
-  printf '{"rate_limits":{"five_hour":{"used_percentage":%s},"seven_day":{"used_percentage":%s}}}' \
-    "$1" "$2" | "$CCEX" record >/dev/null
+  local week=${3:-}
+  [ -z "$week" ] || week=",\"resets_at\":$(week_at "$week")"
+  printf '{"rate_limits":{"five_hour":{"used_percentage":%s},"seven_day":{"used_percentage":%s%s}}}' \
+    "$1" "$2" "$week" | "$CCEX" record >/dev/null
 }
 render 90 40
 absent "the old account's numbers are dropped" "90"        bash -c 'cat "$1" 2>/dev/null || echo none' _ "$snap"
@@ -263,9 +522,79 @@ render 12 22
 t  "the new account's own numbers land" "12"               cat "$snap"
 t  "the filter stays transparent"  "rate_limits"              bash -c 'printf "{\"rate_limits\":{}}" | "$1" record' _ "$CCEX"
 
+# The numbers a session carries go on moving after the switch, so they stop matching what we
+# wrote down as we left. The week they reset in is still the old account's.
+teardown; setup
+"$CCEX" use bee --no-check >/dev/null 2>&1
+snap="$CC_PROFILE_ROOT/.usage/b_example_com.json"
+render 93 41 a
+absent "numbers that moved on are still the old account's" "93" \
+  bash -c 'cat "$1" 2>/dev/null || echo none' _ "$snap"
+render 12 22 b
+t  "and the new account's own still land" "12"             cat "$snap"
+
+# A 5-hour window does not move while it is open, so the reset time a lagging session
+# carries is the account it left with, long after the percentage has climbed away from it.
+teardown; setup
+"$CCEX" use bee --no-check >/dev/null 2>&1
+snap="$CC_PROFILE_ROOT/.usage/b_example_com.json"
+render_five() {   # one window only, with the reset time of whichever account is named
+  rm -f "$CC_PROFILE_ROOT/.usage/.stamp-default"
+  printf '{"rate_limits":{"five_hour":{"used_percentage":%s,"resets_at":%s}}}' \
+    "$1" "$(reset_at five "$2")" | "$CCEX" record >/dev/null
+}
+render_five 97 a
+absent "a reset time outlives the percentage" "97"         bash -c 'cat "$1" 2>/dev/null || echo none' _ "$snap"
+render_five 97 b
+t  "the same number under our own reset lands" "97"        cat "$snap"
+
+# Two switches inside the half hour: the account we left first has to stay recognisable.
+teardown; setup
+"$CCEX" use bee --no-check >/dev/null 2>&1
+"$CCEX" use cee --no-check >/dev/null 2>&1
+snap="$CC_PROFILE_ROOT/.usage/c_example_com.json"
+render 90 40
+absent "two switches back is still recognised" "90"        bash -c 'cat "$1" 2>/dev/null || echo none' _ "$snap"
+render 10 20
+absent "and so is one switch back"            "10"         bash -c 'cat "$1" 2>/dev/null || echo none' _ "$snap"
+render 55 33
+t  "the live account still reports"           "55"         cat "$snap"
+
+# Agreeing with the account we left in one window is not being it.
+teardown; setup                 # a leaves at 90/40; cee, now live, is its own account
+"$CCEX" use cee --no-check >/dev/null 2>&1
+snap="$CC_PROFILE_ROOT/.usage/c_example_com.json"
+render 90 22
+t  "one number in common is not enough" "22"               cat "$snap"
+
+# Numbers filed against the wrong account before this went in are not read back.
+teardown; setup
+python3 - "$CC_PROFILE_ROOT" "$(week_at a)" <<'MISCREDIT'
+import json, os, sys, time
+root, week = sys.argv[1], int(sys.argv[2])
+os.makedirs(root + "/.usage", exist_ok=True)
+json.dump({"email": "c@example.com", "fetchedAtMs": int(time.time() * 1000), "utilization": {
+    "five_hour": {"utilization": 97, "resets_at": time.strftime(
+        "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() + 3600))},
+    "seven_day": {"utilization": 44, "resets_at": time.strftime(
+        "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(week))}}},
+          open(root + "/.usage/c_example_com.json", "w"))
+MISCREDIT
+absent "a mis-credited reading is not believed" "97"       "$CCEX" ls cee
+t  "the account's own cache is used instead"   "50"        "$CCEX" ls cee
+# ...and it is not merged back in either, when a render carries only the other window
+printf '{"rate_limits":{"five_hour":{"used_percentage":7}}}' | \
+  CLAUDE_CONFIG_DIR="$CC_PROFILE_ROOT/cee" "$CCEX" record >/dev/null
+filed() {   # one window's percentage out of a snapshot, so no timestamp can pass for it
+  python3 -c 'import json,sys
+u = (json.load(open(sys.argv[1])).get("utilization") or {}).get(sys.argv[2]) or {}
+print(u.get("utilization"))' "$CC_PROFILE_ROOT/.usage/c_example_com.json" "$1"
+}
+t  "nor merged under a half payload"           "None"      filed seven_day
+t  "which still records what it did carry"     "7"         filed five_hour
+
 echo "the daemon"
 teardown; setup                 # a is live at 90/40, bee at 10/20, cee at 50/30
-live_email() { "$CCEX" ls | awk '/\*/ {print $4}'; }
 before=$(live_email)
 timeout 6 "$CCEX" rotate --serve --at 45 --every 1s >"$HOME/serve.out" 2>&1
 after=$(live_email)

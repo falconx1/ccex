@@ -50,25 +50,48 @@ def usable(a, at):
         and not a.get("held") and a["five"] < cap(a, "five", at) and a["seven"] < cap(a, "seven", at)
 
 
-def ranked(accounts, at=FIVE_AT):
+def unmeasured(a):
+    """Logged in and in the pool, but nothing has ever read its windows.
+
+    Not the same as spent. An account nothing has measured is the one thing the countdown
+    cannot help with: a window past its reset reads 0% by arithmetic, but only for an
+    account that has some number to count down from. With no reading at all there is
+    nothing to infer, so it stays invisible unless something goes and looks.
+    """
+    return bool(a.get("logged_in")) and not a.get("held") \
+        and (a.get("five") is None or a.get("seven") is None)
+
+
+def ranked(accounts, at=FIVE_AT, blind=False):
     """Every account rotation could move to, cheapest first -- the order it picks in.
 
     The 5-hour window is what actually stops you working, so it decides. Weekly moves
     slowly enough that it rarely separates two accounts you would otherwise be choosing
     between, so it only breaks ties.
+
+    `blind` adds the accounts nothing has measured, always behind every account that has
+    been: a real reading beats a guess, so an unmeasured account is only reached for once
+    the known ones are out of room -- which is also the only time it is worth a session to
+    go and read it. Whoever passes `blind` is undertaking to verify before switching;
+    landing on an account whose numbers nobody knows would be worse than the stale numbers
+    this is all meant to fix.
     """
     room = [a for a in accounts if a["name"] != "default" and usable(a, at)]
     room.sort(key=lambda a: (cost(a["five"], a["five_resets"], FIVE_HOUR),
                              cost(a["seven"], a["seven_resets"], SEVEN_DAY),
                              a["name"]))
+    if blind:
+        room += sorted((a for a in accounts if a["name"] != "default" and unmeasured(a)),
+                       key=lambda a: a["name"])
     return room
 
 
-def decide(accounts, at=FIVE_AT):
+def decide(accounts, at=FIVE_AT, blind=False):
     """(verdict, target, message): STAY, NONE, ERR, or SWITCH to `target`.
 
     `message` is the sentence `ccex rotate` prints, which is also the one the watch view
-    shows -- one explanation, one code path.
+    shows -- one explanation, one code path. `blind` is passed through to `ranked`, and
+    means the caller will read an unmeasured account before it lands on one.
     """
     live = next((a for a in accounts if a["name"] == "default"), None)
     if live is None:
@@ -91,7 +114,7 @@ def decide(accounts, at=FIVE_AT):
     others = [a for a in accounts if a["name"] != "default"]
     nodata = [a["name"] for a in others if not a["logged_in"] or a["five"] is None or a["seven"] is None]
     held = [a["name"] for a in others if a.get("held")]
-    room = ranked(accounts, at)
+    room = ranked(accounts, at, blind)
 
     why = "%s is at %d%% 5h / %d%% weekly (%s over %s)" % (
         live["email"], live["five"], live["seven"],
@@ -132,6 +155,11 @@ def decide(accounts, at=FIVE_AT):
         return "NONE", None, "%s, and every other account is too%s" % (why, tail)
 
     best = room[0]
+    if best["five"] is None or best["seven"] is None:
+        # Last in the ranking, so every measured account is spent. Whoever asked for `blind`
+        # reads this one before the slot moves; there is no percentage to quote yet.
+        return "SWITCH", best["name"], "%s, so -> %s, which nothing has measured yet" % (
+            why, best["email"])
     note = " (numbers %dm old)" % (best["age_s"] // 60) if (best["age_s"] or 0) > 900 else ""
     soon = ""
     if best["five_resets"] and best["five_resets"] - time.time() < FIVE_HOUR / 5:
