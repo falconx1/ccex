@@ -2,7 +2,7 @@
 import json, os, sys, time
 
 from ccexlib import USAGE_DIR, hm, hold_auto, load, save, slots, step
-from decide import FIVE_AT, FIVE_HOUR, WEEKLY_AT, cap, decide, ranked, reads
+from decide import FIVE_AT, FIVE_HOUR, WEEKLY_AT, cap, capped, decide, ranked, reads
 
 accounts = json.load(sys.stdin)
 argv = sys.argv[1:]
@@ -47,9 +47,11 @@ def plan():
     nothing going to read that account first, being unmeasured has to keep it out.
     """
     for a in accounts:
-        if a.get("held") or a["seven"] is None or a["seven"] < WEEKLY_AT:
-            continue                      # a low weekly cap keeps an account in reserve; only a
-        why = "weekly at %d%%" % a["seven"]   # week that is genuinely spent retires it
+        if a.get("held") or a["seven"] is None or a["seven"] < WEEKLY_AT or capped(a):
+            continue                      # a cap is a standing arrangement, and an account under
+        why = "weekly at %d%%" % a["seven"]   # one reaches 99% only because that cap gave way in
+        # the last hours of its week -- retiring it there would hold it out of the week starting
+        # minutes later. Only an account you cap nothing on is one you meant to spend to the end.
         if dry or hold_auto(a["email"], why):
             retired.append("%s (%s)" % (a["name"], why))
             a["held"], a["held_auto"] = True, why

@@ -147,13 +147,14 @@ absent "no caps means no CAP column" "CAP"                 "$CCEX" ls
 t  "cap needs a real percentage"  "1 to 100"              "$CCEX" pool cap bee --5h 101
 t  "and 0 points at pool out"     "pool out"              "$CCEX" pool cap bee --5h 0
 t  "an unknown cap flag is refused" "unknown option"      "$CCEX" pool cap bee --5hr 60
-t  "no cap is the --at default"   "no cap of its own"     "$CCEX" pool cap bee
+t  "the bare command is a preset" "5h 60%, weekly 75%"    "$CCEX" pool cap bee
+t  "and clearing puts it back"    "back on the defaults"  "$CCEX" pool cap bee --clear
 t  "set one window"               "5h 5%"                 "$CCEX" pool cap bee --5h 5
 t  "the other still follows --at" "weekly still follows"  "$CCEX" pool cap bee --5h 5
 t  "capped is marked c"           "c"                     mark_of b@example.com
 n_bee=$("$CCEX" ls | awk '/b@example.com/ {print $1}')
 t  "cap by account number"        "5h 60%, weekly 99%"    "$CCEX" pool cap "$n_bee" --5h 60 --weekly 99
-t  "and reads back by number"     "is capped at"          "$CCEX" pool cap "$n_bee"
+t  "and ls reads it back"         "5h 60% / weekly 99%"   "$CCEX" ls "$n_bee"
 t  "ls grows a CAP column"        "CAP"                   "$CCEX" ls
 t  "showing both windows"         "60/99"                 "$CCEX" ls
 t  "and a dash for an uncapped one" "5/-"                 bash -c '"$1" pool cap cee --5h 5 >/dev/null; "$1" ls' _ "$CCEX"
@@ -273,13 +274,78 @@ t  "and that account is retired"   "weekly at 99%"         cat "$CC_PROFILE_ROOT
 t  "ls marks it X"                 "X"                     bash -c '"$1" ls | awk "/a@example.com/ {print substr(\$0, 5, 2)}"' _ "$CCEX"
 absent "rotation will not go back to it" "a@example.com"    "$CCEX" rotate --at 1 -n --no-launch
 t  "pool in is the way back"       "back in the rotation"  "$CCEX" pool in a@example.com
-absent "and it clears the mark"    "X"                     bash -c '"$1" ls | awk "/a@example.com/ {print substr(\$0, 5, 2)}"' _ "$CCEX"
-pool_file() { cat "$CC_PROFILE_ROOT/.pool.json" 2>/dev/null || echo "{}"; }
 teardown; setup
 spend_week "$HOME/.claude.json" 99
 absent "a dry run retires nothing" "a@example.com"          bash -c '"$1" rotate --at 80 -n --no-launch >/dev/null; cat "$2/.pool.json" 2>/dev/null' _ "$CCEX" "$CC_PROFILE_ROOT"
 teardown; setup                 # a's week is untouched here: only its 5-hour window is spent
 absent "a spent 5h window does not retire" "a@example.com"  bash -c '"$1" rotate --at 45 --no-launch >/dev/null 2>&1; cat "$2/.pool.json" 2>/dev/null' _ "$CCEX" "$CC_PROFILE_ROOT"
+
+rank_says() {   # the order is arithmetic too: a synthetic fleet, no accounts, no clock
+  CCEX_BASE="$HOME/.claude" CCEX_ROOT="$CC_PROFILE_ROOT" \
+  PYTHONPATH="$(dirname "$CCEX")/../lib/py" python3 - "$1" <<'PYEOF'
+import sys, time
+from decide import listing, ranked
+now = time.time()
+def acct(name, five, five_in, seven, cap5=None, cap7=None, days=5):
+    return {"name": name, "logged_in": True, "held": False, "five": five, "seven": seven,
+            "five_resets": now + five_in * 60 if five_in is not None else None,
+            "seven_resets": now + days * 86400, "cap_five": cap5, "cap_seven": cap7}
+live = acct("default", 95, 60, 50)
+live["id"] = 1
+if sys.argv[1] == "refill":
+    # `tail` has less left than `fresh`, but its window turns over in a quarter of an hour
+    fleet = [live, acct("fresh", 0, -30, 3), acct("tail", 36, 15, 43)]
+elif sys.argv[1] == "capped-last":
+    # `shared` has more room than `fresh` and still comes second: a cap is a reserve
+    fleet = [live, acct("fresh", 50, 200, 3), acct("shared", 0, 200, 20, 60, 75)]
+elif sys.argv[1] == "pressure-breaks-ties":
+    # same room now; `behind` has a whole week to spend and `ahead` has almost none left to
+    fleet = [live, acct("ahead", 0, -30, 80), acct("behind", 0, -30, 5)]
+elif sys.argv[1] == "pressure-is-per-day":
+    # same points left, but `soon` has a day to spend them in and `later` has five
+    fleet = [live, acct("later", 0, -30, 50), acct("soon", 0, -30, 50, days=1)]
+elif sys.argv[1] == "listing":
+    # what a view shows: the live account, then the next candidate, then what is out of reach
+    out = acct("out", 0, 200, 5)
+    out["held"], out["id"] = True, 2
+    fleet = [acct("next", 0, -30, 40), out, live]
+    print(",".join(a["name"] for a in listing(fleet, 90)))
+    raise SystemExit
+print(",".join(a["name"] for a in ranked(fleet, 90)))
+PYEOF
+}
+echo "which account rotation reaches for"
+t  "a window about to turn over wins" "tail,fresh"    rank_says refill
+t  "a capped account is the fallback" "fresh,shared"  rank_says capped-last
+t  "the week at risk goes first"      "behind,ahead"  rank_says pressure-breaks-ties
+t  "and it is per day, not per point" "soon,later"    rank_says pressure-is-per-day
+t  "a view lists it live first"       "default,next,out" rank_says listing
+
+cap_says() {   # the schedule is arithmetic, so it is testable without a clock or an account
+  CCEX_BASE="$HOME/.claude" CCEX_ROOT="$CC_PROFILE_ROOT" \
+  PYTHONPATH="$(dirname "$CCEX")/../lib/py" python3 - "$1" <<'PYEOF'
+import sys, time
+from decide import cap
+h = sys.argv[1]
+a = {"cap_five": 60, "cap_seven": 75,
+     "seven_resets": None if h == "none" else time.time() + float(h) * 3600}
+print("%s/%s" % (cap(a, "five", 90), cap(a, "seven", 90)))
+PYEOF
+}
+echo "a cap that gives way as its week ends"
+t  "it holds while the week does"    "60/75"   cap_says 72
+t  "two days out it starts to give"  "60/80"   cap_says 40
+t  "five more points twelve hours on" "60/85"  cap_says 30
+t  "and again"                       "60/90"   cap_says 20
+t  "and again"                       "60/95"   cap_says 8
+t  "the last window is the default"  "90/99"   cap_says 3
+t  "a reset already passed does not" "60/75"   cap_says -3
+t  "nor does an unmeasured week"     "60/75"   cap_says none
+teardown; setup
+spend_week "$HOME/.claude.json" 99
+"$CCEX" pool cap a@example.com --weekly 90 >/dev/null
+absent "an account that caps its own week is never retired" "a@example.com" \
+  bash -c '"$1" rotate --at 80 --no-launch >/dev/null 2>&1; cat "$2/.pool.json" 2>/dev/null' _ "$CCEX" "$CC_PROFILE_ROOT"
 
 echo "verifying before the switch"
 # probe() launches the real TUI; this stands in for it, writing what /usage would have
@@ -906,8 +972,8 @@ t  "and passes both numbers on"    "cap a@example.com --5h 60 --weekly 80" cap_p
 t  "a dash leaves one uncapped"    "cap a@example.com --clear --weekly 30" cap_prompt "-|30|"
 absent "esc runs nothing"          "would run"                cap_prompt "60|$(printf '\033')"
 drive 'c60\r45\r' >/dev/null
-t  "the view really writes a cap"  "5h 60%, weekly 45%"       "$CCEX" pool cap 1
-t  "and ls shows it"               "60/45"                    "$CCEX" ls
+t  "the view really writes a cap"  "5h 60% / weekly 45%"      "$CCEX" ls 1
+t  "and ls shows it in force"      "60/60*"                   "$CCEX" ls
 drive '\x1b[C' >/dev/null
 t  "right takes it out of the pool" "a@example.com"            cat "$CC_PROFILE_ROOT/.pool.json"
 drive '\x1b[D' >/dev/null

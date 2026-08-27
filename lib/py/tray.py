@@ -29,7 +29,7 @@ if IND is None:
 from gi.repository import Gio, GLib, Gtk    # noqa: E402  -- after require_version, as gi insists
 
 from ccexlib import canon, hm, is_base, running_at, slots
-from decide import FIVE_AT, cap, reads
+from decide import FIVE_AT, cap, listing, reads
 from usage import GRACE, account_json, fill
 
 CCEX = os.environ.get("CCEX_BIN") or "ccex"
@@ -102,24 +102,23 @@ def left(t, now):
 
 
 def read():
-    """Every account as the panel draws it, emptiest 5-hour window first.
+    """Every account as the panel draws it, in the order rotation would reach for them.
 
     The empty `pids` is what keeps a resident panel cheap: it is the one argument that
     stops `account_json` walking /proc for `live`, which is a field no row here draws and
     most of what a tick would otherwise cost.
     """
-    now, rows = time.time(), []
+    now, at, rows = time.time(), running_at(FIVE_AT), []
     for name, d in slots():
         a = account_json(name, d, now, {})
         a["current"] = is_base(d)
         a["short"] = canon(a["email"]) if a["email"] else name
         rows.append(a)
-    # Emptiest 5-hour window first. The menu answers one question -- which account do I go
-    # to -- and the account with the most room answers it far more often than the account
-    # with the lowest number. The numbers stay in their column, which is what keeps
-    # `ccex use 3` and the third row the same account when the order moves.
-    rows.sort(key=lambda a: (a["five"] or 0, a["seven"] or 0, a["id"] or 999))
-    return now, rows
+    # Rotation's own order: the account in use, then the one a switch would land on, then
+    # the one after that. The menu answers one question -- which account do I go to -- and
+    # the row under the live one is that answer. The numbers stay in their column, which is
+    # what keeps `ccex use 3` and the third row the same account when the order moves.
+    return now, at, listing(rows, at)
 
 
 def parts(a, now):
@@ -229,7 +228,7 @@ class Tray:
         return True           # GLib keeps a timeout that says so
 
     def draw(self):
-        now, rows = read()
+        now, at, rows = read()
         here = next((a for a in rows if a["current"]), None)
         others = [a for a in rows if not a["current"]]
         shape = tuple(a["email"] for a in others)
@@ -237,7 +236,6 @@ class Tray:
             self.build(others)
             self.shape = shape
         self.cols.measure(rows, now)
-        at = running_at(FIVE_AT)   # where rotation is really moving off, which is what caps cap
         self.head.set_label(row_label(here, now, self.cols, at) if here
                             else "no account is logged in")
         for a in others:

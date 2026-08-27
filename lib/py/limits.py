@@ -6,6 +6,7 @@ Only `--force` asks an account directly, which is the one thing here that starts
 import json, sys, time
 
 from ccexlib import BASE, caps, email_for, expand, held, held_auto, id_for, is_base, slots
+from decide import FIVE_AT, cap as in_force
 from probe import NOTE, probe
 from usage import (account_json, age, cached, compact, live_sessions, still_counting,
                    window)
@@ -49,6 +50,25 @@ else:
             sys.exit("ccex: '%s' matches %s" % (t, ", ".join(n for n, _ in hit)))
         targets.append(hit[0])
 
+def in_force_pair(name, d):
+    """The two percentages this account is actually held to now, which near its weekly reset
+    is not what it set: `cap` steps aside as the week it protects runs out."""
+    row = account_json(name, d)
+    return in_force(row, "five", FIVE_AT), in_force(row, "seven", FIVE_AT)
+
+
+def cap_cell(name, d, c5, c7):
+    """The CAP column: the percentages in force, with a * when they are not the ones set.
+
+    A window this account did not cap stays a dash -- it follows --at like everyone else,
+    and printing the default there would read as a cap it never set."""
+    if not (c5 or c7):
+        return "-"
+    e5, e7 = in_force_pair(name, d)
+    gave = (c5 and e5 != c5) or (c7 and e7 != c7)
+    return "%s/%s%s" % ("%d" % e5 if c5 else "-", "%d" % e7 if c7 else "-", "*" if gave else "")
+
+
 rows, notes = [], []
 for name, d in targets:
     have = cached(d)
@@ -89,7 +109,7 @@ elif tsv:
                          compact(d, "five_hour").ljust(22), compact(d, "seven_day").ljust(26),
                          "live" if cached(d)["source"] == "session" and live_sessions(d) else age(d),
                          flags or "-",
-                         "%s/%s" % (c5 or "-", c7 or "-") if (c5 or c7) else "-"]))
+                         cap_cell(name, d, c5, c7)]))
 elif quiet and len(rows) == 1:
     name, email, five, seven, a = rows[0]
     print("ccex: limits for %s (%s)" % (email, a if a == "live" else "checked " + a))
@@ -99,6 +119,9 @@ elif quiet and len(rows) == 1:
     if c5 or c7:                  # only worth a line when this account sets its own
         print("        cap     %s (its own; uncapped windows follow --at for 5h (default 90), 99%% for the week)" %
               " / ".join("%s %d%%" % (w, v) for w, v in (("5h", c5), ("weekly", c7)) if v))
+        e5, e7 = in_force_pair(name, targets[0][1])
+        if (e5, e7) != (c5, c7):
+            print("        in force 5h %d%% / weekly %d%% -- its cap steps aside as its week ends" % (e5, e7))
 else:
     print("%-20s %-30s %-44s %-48s %s" % ("ACCOUNT", "EMAIL", "5-HOUR", "WEEKLY", "CHECKED"))
     for name, email, five, seven, a in rows:

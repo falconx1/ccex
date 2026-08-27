@@ -23,7 +23,7 @@ With no account, every account as one row each:
 
   #         its number: `ccex use 3` is the whole switch
   ACCOUNT   slot name; * marks the live one, x one you held out of the rotation pool,
-            X one rotation retired because its week is spent (`ccex pool in` revives it)
+            X one rotation retired because its week is spent, until that week resets
   TOKEN     access token: active, or stale until something uses the account
   REFRESH   when the login itself expires and needs a browser again
   5H        share of the 5-hour window spent, and how long until it resets
@@ -187,8 +187,10 @@ own percentage instead of at --at:
   ccex pool cap 4 --5h 60 --weekly 99   leave 40% of every 5-hour window unspent on
                                         account 4, and let its week run to 99%
   ccex pool cap work --5h 95            or run one right down before moving on
-  ccex pool cap work                    what it is capped at now
+  ccex pool cap work                    the shared-account preset, 5h 60% / weekly 75%
   ccex pool cap work --clear            back to the --at default
+
+`ccex ls work` reads a cap back, and shows what is in force now if it has begun to give way.
 
 <account> here is the same as everywhere else: the number from `ccex ls`, a slot name, an
 email, or any unambiguous prefix.
@@ -198,6 +200,19 @@ not land on it above the cap either. Windows you don't cap keep following --at, 
 account can protect its week and share everyone else's 5-hour threshold. Capped accounts
 are marked c in `ccex ls`, which also grows a CAP column showing 5h/weekly once anything is
 capped -- `60/99` caps both, `-/25` only the week.
+
+A cap protects a week, so it gives way as that week ends. What it is holding back would
+expire at the reset either way, unspent by you or by anyone else sharing the account:
+
+  more than two days left   the cap you set
+  from 48h                  five points every twelve hours, up to 99%
+  under 5h                  the default, 90/99 -- one window left to spend the week in
+
+The 5-hour ceiling is the one anyone else on that account feels, so it alone holds until
+the last band. The CAP column shows the percentages in force and marks them * while they
+are not the ones you set; `ccex ls <account>` says so in words. Nothing is remembered and
+nothing needs resetting: this is the clock being read, so the cap you set is back the
+moment the new week starts.
 U
 ;;
     tray) cat <<'U'

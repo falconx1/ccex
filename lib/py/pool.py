@@ -9,6 +9,7 @@ from ccexlib import CAPS, POOL, email_for, expand, load, save, slots
 
 WINDOWS = {"--5h": "five_hour", "--weekly": "seven_day"}
 LABEL = {"five_hour": "5h", "seven_day": "weekly"}
+SHARED = {"five_hour": 60, "seven_day": 75}   # what `ccex pool cap <account>` means on its own
 
 action = sys.argv[1]
 argv = sys.argv[2:]
@@ -62,14 +63,11 @@ while i < len(rest):
 caps = load(CAPS)
 mine = dict(caps.get(email) or {})
 
-if not set_ and not clear:                  # no flags: report, so `cap <account>` is safe to type
-    if mine:
-        print("ccex: %s is capped at %s" % (email, ", ".join(
-            "%s %d%%" % (LABEL[k], mine[k]) for k in ("five_hour", "seven_day") if k in mine)))
-        print("ccex: `ccex pool cap %s --clear` puts it back on the defaults" % name)
-    else:
-        print("ccex: %s has no cap of its own; rotation uses --at for 5h (default 90) and 99%% for the week" % email)
-    raise SystemExit
+if not set_ and not clear:
+    # No numbers: the shared-account preset, which is what a cap is nearly always for --
+    # enough of every 5-hour window left for whoever else is on the account, and a week
+    # you cannot spend all of by Wednesday. `ccex ls <account>` reads a cap back.
+    set_ = dict(SHARED)
 
 if clear and not set_:
     if not mine:
