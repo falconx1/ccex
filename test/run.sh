@@ -333,16 +333,24 @@ out=$("$CCEX" rotate --at 80 --no-verify 2>&1)
 t  "--no-verify asks nothing"                "b@example.com"   echo "$out"
 absent "and reports no check"                "checked just now" echo "$out"
 
-teardown; setup                 # no `claude` to launch at all
+teardown; setup                 # bee will not answer, cee will: the next candidate is used
+fake_claude '{"c@example.com": [50, 30]}'
 age_numbers
 out=$("$CCEX" rotate --at 80 2>&1)
-t  "an account that cannot be asked is still used" "b@example.com"        echo "$out"
-t  "and the line admits it was not checked"        "could not be checked" echo "$out"
+t  "an account that will not answer is passed over" "trying the next account" echo "$out"
+t  "and the next one is asked instead"              "c@example.com"  live_email
+absent "so the silent one is not used"              "b@example.com"  live_email
+
+teardown; setup                 # no `claude` to launch at all: nothing can be asked
+age_numbers
+out=$("$CCEX" rotate --at 80 2>&1)
+t  "with nothing answering it says so"        "none of them could be asked" echo "$out"
+t  "and falls back to the numbers on file"    "b@example.com"        live_email
 
 teardown; setup
 age_numbers
 out=$("$CCEX" rotate --at 80 -n 2>&1)
-absent "a dry run asks nothing"              "could not be checked" echo "$out"
+absent "a dry run asks nothing"              "could not be asked" echo "$out"
 
 # An account nothing has measured is invisible to ranking, so it can never be the candidate
 # that gets checked -- unless being unmeasured is itself allowed to reach the check.

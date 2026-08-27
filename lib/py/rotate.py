@@ -76,7 +76,7 @@ if verify and not dry:
     from probe import probe                # importing it is what makes a session possible
     from usage import account_json
 
-    dirs, checked, notes = dict(slots()), [], []
+    dirs, checked, notes, unasked = dict(slots()), [], [], []
     while verdict == "SWITCH" and target not in checked and len(checked) < TRIES:
         checked.append(target)
         row = next((a for a in accounts if a["name"] == target), None)
@@ -96,17 +96,36 @@ if verify and not dry:
             elif reads(row) != was:
                 notes.append("%s reads %s checked just now, not %s" % (target, reads(row), was))
         elif blind:
-            # Nothing to fall back on: landing on an account whose windows nobody has ever
-            # read would be a worse guess than the stale numbers this is here to replace.
+            # Never measured and it could not be measured now: there is nothing to fall back
+            # on, so it leaves the running altogether rather than being guessed at.
             skip.add(target)
             notes.append("%s has never been measured and could not be asked (%s)" % (target, st))
         else:
-            # Unverified is not the same as out of room: a probe that cannot run must not
-            # empty the pool, so the switch goes ahead on the numbers we had, and says so.
-            notes.append("%s could not be checked first (%s)" % (target, st))
-            break
+            # Could not be asked is not the same as has no room -- but an account that can be
+            # asked is a better answer than one that cannot, so this tries the next instead of
+            # going ahead on numbers nothing has confirmed. It stays a fallback for the case
+            # where none of them can be asked, below.
+            skip.add(target)
+            unasked.append(target)
+            notes.append("%s could not be asked (%s), so trying the next account" % (target, st))
         verdict, target, message, more = plan()
         retired += more
+
+    if verdict == "SWITCH" and target not in checked and len(checked) >= TRIES:
+        # The loop stops asking somewhere: three sessions is already most of a minute inside
+        # the lock. Whoever is left is used on the numbers on file, which is worth saying.
+        notes.append("%s was not asked, %d others were" % (target, len(checked)))
+
+    if verdict != "SWITCH" and unasked:
+        # Every account that could be asked is spent, and none of the rest would answer. Room
+        # on file is a poor answer but staying on an account with none is a worse one, so the
+        # best of them is used after all -- and the line says that is what happened.
+        skip.difference_update(unasked)
+        verdict, target, message, more = plan()
+        retired += more
+        if verdict == "SWITCH":
+            notes.append("none of them could be asked, so this is the numbers on file")
+
     for n in notes:
         message += "; " + n
 

@@ -120,14 +120,16 @@ the tie-break. Rotating once exits 1 if every account is spent.
 Before the slot changes hands, the account being moved to is asked what it actually has
 left -- one short session on it, a few seconds. Nothing reports for a parked account, so
 its numbers are as old as the last time it was live, and an account spent somewhere else
-in the meantime reads as free until something asks it. An account that turns out to have
-no room is passed over for the next candidate; one that cannot be asked at all is still
-switched to, on the numbers already on file, and the line says so.
+in the meantime reads as free until something asks it. One rule covers every answer: if it
+cannot be asked, try the next one -- whether it turned out to have no room or would not
+answer at all. Up to three are asked, a session each. Only when none of them will answer
+does it fall back to the numbers on file, and the line says so, because staying on an
+account with no room is worse than moving to one that probably has some.
 
 Because the check exists, an account nothing has measured can be a candidate too, behind
 every account that has been -- otherwise ranking, which needs numbers, could never reach
-one. That is the one case where a failed check skips the account instead of using it: there
-is nothing to fall back on. `--no-verify` skips the asking, and drops unmeasured accounts
+one. It is the one thing with no fallback: if it cannot be measured, there are no numbers
+to fall back to, so it leaves the running. `--no-verify` skips the asking, and drops unmeasured accounts
 with it; `-n` never asks.
 
 Nothing is checked on a timer. A window past its reset reads 0% without asking anyone, so

@@ -269,13 +269,21 @@ ccex: ada@example.com is at 60% 5h / 17% weekly (5h over 50%), so -> ada@acme.ex
 ccex: ada-work -> ada@acme.example -> live
 ```
 
-An account that turns out to have no room is passed over for the next candidate, up to
-three. One that **can't** be asked — no `claude` to launch, no folder it trusts, a check
-that times out — is still switched to, on the numbers already on file, and the line says
-so: broken check machinery must not quietly empty the pool. A profile that has never been
-live has trusted no folders, so it has nowhere to be launched; the trust already granted in
-the live account's config is copied over for it, which is what `ccex add` seeds a new
-profile with anyway.
+One rule covers every answer: **if it can't be asked, try the next one.** An account that
+turns out to have no room is passed over. So is one that *won't answer* — no `claude` to
+launch, no folder it trusts, a check that times out — because an account that can be asked
+is a better answer than one that cannot. Up to three are asked; asking is a session each,
+and three is already most of a minute.
+
+Only when *none* of them will answer does it fall back to the numbers on file, and the line
+says that is what happened. Broken check machinery must not quietly empty the pool — staying
+on an account with no room left is worse than moving to one that probably has some. An
+account that has never been measured is the exception, and gets no fallback: there are no
+numbers to fall back to.
+
+A profile that has never been live has trusted no folders, so it has nowhere to be launched;
+the trust already granted in the live account's config is copied over for it, which is what
+`ccex add` seeds a new profile with anyway.
 
 Because the check exists, an account **nothing has ever measured** can be a candidate too —
 ranked behind every account that has been, so it is only reached for once the measured ones
