@@ -281,9 +281,18 @@ on an account with no room left is worse than moving to one that probably has so
 account that has never been measured is the exception, and gets no fallback: there are no
 numbers to fall back to.
 
-A profile that has never been live has trusted no folders, so it has nowhere to be launched;
-the trust already granted in the live account's config is copied over for it, which is what
-`ccex add` seeds a new profile with anyway.
+Two things stop a launch, and folder trust is only the obvious one. A profile that has never
+been onboarded stops on the theme picker, so `/usage` is never typed and the check waits out
+its whole timeout looking exactly like a slow account — on the machine this was written on,
+two probes in three were failing that way at 50 seconds each. Both the onboarding and the
+folder trust come from the live account's config, which is what `ccex add` seeds a new profile
+with, and `ccex use` re-seeds at park time so a slot that hands its login away does not lose
+them. With both in place a check takes about six seconds.
+
+`CCEX_PROBE_TIMEOUT` raises the ceiling on a machine where claude starts slowly. Rotation may
+ask up to three accounts and holds the switch lock while it does, so raising it raises
+`CCEX_LOCK_WAIT` (180s) with it. While a check is running the live view says `asking <name>…`,
+because a switch that spends three sessions otherwise looks like a view that has stopped.
 
 Because the check exists, an account **nothing has ever measured** can be a candidate too —
 ranked behind every account that has been, so it is only reached for once the measured ones

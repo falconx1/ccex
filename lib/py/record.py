@@ -2,7 +2,8 @@
 import datetime, json, os, sys, time
 
 import burn
-from ccexlib import BASE, USAGE_DIR, cfg_for, foreign_report, learn_anchor, save, snap_path
+from ccexlib import (BASE, USAGE_DIR, cfg_for, foreign_report, lagging_session, learn_anchor,
+                     save, snap_path)
 
 raw = sys.stdin.read()
 try:
@@ -24,8 +25,11 @@ try:
         util[k] = {"utilization": v.get("used_percentage"),
                    "resets_at": datetime.datetime.fromtimestamp(ra, datetime.timezone.utc).isoformat() if ra else None}
     # This session has not caught up with a switch yet: these are the previous account's
-    # numbers, and this account must not be credited with them.
-    if foreign_report(email, util):
+    # numbers, and this account must not be credited with them. Two ways to tell, and either
+    # is enough -- the window boundary belongs to another account, or the session has had no
+    # reply from the API since the switch, so whatever it is rendering was answered by the
+    # account we left.
+    if foreign_report(email, util) or lagging_session(payload):
         raise SystemExit
     learn_anchor(email, (util.get("seven_day") or {}).get("resets_at"))
     os.makedirs(USAGE_DIR, exist_ok=True)

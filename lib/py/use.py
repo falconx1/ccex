@@ -2,7 +2,7 @@
 import os, shutil, sys, time
 
 from ccexlib import (BASE, ROOT, canon, cfg_for, creds_for, email_for, expand, held,
-                     id_for, load, logged_in, note_switch, save)
+                     id_for, load, logged_in, note_switch, save, seed_into)
 from decide import FIVE_AT, cap
 from usage import account_json, cached
 
@@ -99,6 +99,11 @@ pkcfg = load(pk_cfg)
 for k in ("oauthAccount", "userID", "cachedUsageUtilization"):
     if k in lcfg:
         pkcfg[k] = lcfg[k]
+# probe() needs a folder this slot's own config trusts. A slot that hands its login away is
+# deleted, so the seed `ccex add` gave it is gone by the time rotation parks an account here
+# again -- without re-seeding now, a parked account answers "untrusted" and can never be
+# measured. Seeding at park time is the fix; borrow_trust() only patches it at probe time.
+seed_into(pkcfg, lcfg)
 save(pk_cred, pk)
 save(pk_cfg, pkcfg)
 

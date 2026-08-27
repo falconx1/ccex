@@ -16,6 +16,7 @@ TRIES = 3           # candidates to ask directly before going with what we alrea
 CURRENT = 300       # numbers this recent are worth nothing extra to re-ask for
 NEAR = 5            # percentage points below the cap that count as about to switch
 AHEAD = os.path.join(USAGE_DIR, ".readahead.json")   # what was already read for this window
+ASKING = os.path.join(USAGE_DIR, ".asking")          # who is being asked, while it is happening
 skip = set()        # candidates this run has ruled out, so re-deciding does not offer them again
 
 
@@ -57,6 +58,20 @@ def plan():
                   at, blind=verify and not dry) + (retired,)
 
 
+def asking(name):
+    """Say who is being asked, or clear it. A probe is a session: it can take most of a
+    minute, and the view has nothing else to tell it apart from a view that has frozen."""
+    try:
+        if name:
+            os.makedirs(USAGE_DIR, exist_ok=True)
+            with open(ASKING, "w") as f:
+                f.write(name)
+        elif os.path.exists(ASKING):
+            os.remove(ASKING)
+    except OSError:
+        pass
+
+
 def reads(a):
     return "%d%% 5h / %d%% weekly" % (a["five"] or 0, a["seven"] or 0)
 
@@ -87,7 +102,9 @@ if verify and not dry:
         if current and not blind:
             break                          # measured moments ago; there is nothing to ask
         was = None if blind else reads(row)      # "0%" would claim a reading there never was
+        asking(target)
         st = probe(dirs[target])
+        asking(None)
         if st == "ok":
             row = account_json(target, dirs[target])
             accounts[[a["name"] for a in accounts].index(target)] = row
@@ -165,7 +182,9 @@ if verify and not dry and verdict == "STAY":
             from usage import account_json
             os.makedirs(USAGE_DIR, exist_ok=True)
             save(AHEAD, {"name": cand["name"], "at": time.time()})   # before, so a crash counts
+            asking(cand["name"])
             st = probe(dirs[cand["name"]])
+            asking(None)
             if st == "ok":
                 row = account_json(cand["name"], dirs[cand["name"]])
                 message += "; %s reads %d%% 5h / %d%% weekly, read ahead of the switch" % (

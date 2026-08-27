@@ -67,7 +67,7 @@ does. Piped to a file it prints plain frames instead of drawing.
 U
 ;;
     use) cat <<'U'
-ccex use <account> [-n|--dry-run] [--no-check]
+ccex use <account> [-n|--dry-run] [--no-check] [--no-report]
 
 Hand the live ~/.claude slot to <account> and park whoever was there. <account> is the
 number from `ccex ls`, a slot name, a full email, or any unambiguous prefix — `ccex use 3`
@@ -75,6 +75,7 @@ is the quickest.
 
   -n, --dry-run   say what would move, write nothing
   --no-check      neither ask the account first nor report afterwards
+  --no-report     ask, but print no table -- what the live view switches with
 
 Sessions you already have open follow the switch.
 
@@ -403,11 +404,12 @@ case "$cmd" in
     else monitor "$mode" ${rest[@]+"${rest[@]}"}; fi
     ;;
   use)
-    [ $# -ge 1 ] || die "usage: ccex use <account> [--dry-run] [--no-check]"
-    check=1; dry=0; target=
+    [ $# -ge 1 ] || die "usage: ccex use <account> [--dry-run] [--no-check] [--no-report]"
+    check=1; report=1; dry=0; target=
     for a in "$@"; do
       case "$a" in
-        --no-check)     check=0 ;;
+        --no-check)     check=0; report=0 ;;
+        --no-report)    report=0 ;;   # ask, but keep the table out of a TUI
         -n|--dry-run)   dry=1 ;;
         -*)             die "use: unknown option '$a' (try: ccex use -h)" ;;
         *)              [ -n "$target" ] && die "use takes one account, got '$target' and '$a'"; target=$a ;;
@@ -432,7 +434,7 @@ case "$cmd" in
       esac
     fi
     rc=0
-    do_use "$target" $([ "$check" = 1 ] || echo --no-check) || rc=$?
+    do_use "$target" $([ "$report" = 1 ] || echo --no-check) || rc=$?
     [ "$rc" = 3 ] && exit 0        # use_acct already said it was live; that is not a failure
     exit "$rc"
     ;;

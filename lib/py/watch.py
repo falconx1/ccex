@@ -9,7 +9,7 @@ view never freezes waiting for one.
 import os, select, shutil, subprocess, sys, termios, threading, time, tty
 
 import burn
-from ccexlib import ROOT, fresh, hm, id_for, save, slots
+from ccexlib import ROOT, USAGE_DIR, fresh, hm, id_for, save, slots
 from decide import FIVE_AT, cap, decide, ranked
 from usage import GRACE, account_json, age_text, bar, live_map
 
@@ -506,6 +506,13 @@ class View:
 
         t = self.timer
         rot = Line().add(" rotation     ", BOLD)
+        try:                          # rotate.py writes this while it has a session open
+            with open(os.path.join(USAGE_DIR, ".asking")) as f:
+                who = f.read().strip()
+        except OSError:
+            who = ""
+        if who:
+            rot.add("asking %s..." % who, YELLOW).add("  ")
         if t["active"]:
             rot.add("rotating on data change", GREEN)
             rot.add(", every %s at %s%%" % (t["every"] or "?", t["at"] or "?"))
@@ -702,7 +709,7 @@ def main():
                 elif key in ("\r", "\n"):
                     on = v.picked() or v.selected()
                     if on and on["name"] != "default":
-                        v.background("switching", [CCEX, "use", on["email"], "--no-check"])
+                        v.background("switching", [CCEX, "use", on["email"], "--no-report"])
                     v.typed = ""
                 elif key.isdigit() and (v.typed or key != "0") and len(v.typed) < 3:
                     # The numbers in the # column are the ones `ccex use` takes, so typing
@@ -714,7 +721,7 @@ def main():
                 elif key in ("\x7f", "\b") and v.typed:
                     v.typed = v.typed[:-1]
                 elif key in ("y", "Y") and v.picked():
-                    v.background("switching", [CCEX, "use", v.picked()["email"], "--no-check"])
+                    v.background("switching", [CCEX, "use", v.picked()["email"], "--no-report"])
                     v.typed = ""
                 elif key in ("a", "A"):
                     v.typed = ""

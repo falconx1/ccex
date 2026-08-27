@@ -21,6 +21,26 @@ def load(path):
 _cached = {}
 CFG_KEYS = ("oauthAccount", "cachedUsageUtilization")   # all anyone reads from a .claude.json
 
+SEED_KEYS = ("hasCompletedOnboarding", "lastOnboardingVersion", "lastReleaseNotesSeen", "theme",
+             "installMethod", "autoUpdates", "respectGitignore", "tipsHistory", "hasSeenTasksHint",
+             "showExpandedTodos", "copyOnSelect", "migrationVersion", "hasIdeOnboardingBeenShown")
+
+
+def seed_into(dst, src):
+    """Copy the non-account config -- onboarding, theme, folder trust -- into a profile.
+
+    Folder trust is the load-bearing part: probe() has to start claude in a directory this
+    slot already trusts, or the TUI stops on the trust dialog and no number comes back.
+    Nothing here is overwritten, so seeding an already-seeded profile changes nothing.
+    """
+    for k in SEED_KEYS:
+        if k in src and k not in dst:
+            dst[k] = src[k]
+    proj = dst.setdefault("projects", {})
+    for k, v in (src.get("projects") or {}).items():
+        proj.setdefault(k, v)
+    return len(proj)
+
 
 def fresh(path, keep=None):
     """load(), but only re-parsed when the file has actually changed.
@@ -71,8 +91,18 @@ def is_base(d):
 
 
 def cfg_for(d):
-    """Where this slot keeps its config. The live slot's is ~/.claude.json, not inside ~/.claude."""
-    return os.path.expanduser("~/.claude.json") if is_base(d) else os.path.join(d, ".claude.json")
+    """Where this slot keeps its config.
+
+    The live slot's is ~/.claude.json only while CLAUDE_CONFIG_DIR is unset. Export it -- as a
+    multi-account shell setup does -- and Claude Code writes $CLAUDE_CONFIG_DIR/.claude.json
+    instead, leaving ~/.claude.json a stale file no session reads. Preferring the inner one
+    when it exists is what keeps `use` parking under the account that was really live, rather
+    than under whatever name that stale file last held.
+    """
+    if not is_base(d):
+        return os.path.join(d, ".claude.json")
+    inner = os.path.join(BASE, ".claude.json")
+    return inner if os.path.exists(inner) else os.path.expanduser("~/.claude.json")
 
 
 def creds_for(d):
@@ -243,6 +273,57 @@ def same_reading(mine, was):
         return abs(ra - rb) <= 60
     a, b = mine.get("utilization"), was.get("utilization")
     return a is not None and b is not None and abs(a - b) < 1
+
+
+def last_api_reply(path, tail=1 << 18):
+    """When this session last had a reply from the API, or None if it cannot be told.
+
+    A statusline render costs no request, so a session's rate limits are exactly as old as
+    its last reply -- and nothing the statusline hands over says which account answered it.
+    The transcript does say when it arrived, and that is enough.
+
+    Only main-thread assistant lines with a request behind them count: metadata lines carry
+    no exchange, and a subagent's replies do not refresh what the statusline renders.
+    """
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - tail))
+            chunk = f.read().decode("utf-8", "ignore")
+    except OSError:
+        return None
+    for line in reversed(chunk.splitlines()):
+        if '"assistant"' not in line or '"requestId"' not in line:
+            continue
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue                  # a tail can start mid-line; the next one up is whole
+        if o.get("type") != "assistant" or o.get("isSidechain") or not o.get("timestamp"):
+            continue
+        return epoch(o["timestamp"].replace("Z", "+00:00"))
+    return None
+
+
+def lagging_session(payload):
+    """True when this session has not heard from the API since the last account switch.
+
+    Provenance, where the week point only has coincidence to go on: numbers that reached a
+    session before the switch were answered by the account we have since left, whatever they
+    happen to look like. It catches a late render whose window boundary is missing, or whose
+    week point happens to collide with the account now live.
+
+    Only the newest departure matters. Time is ordered, so a session that predates the most
+    recent switch predates every earlier one too.
+
+    It abstains rather than guesses. No switch on record, or no readable transcript, and the
+    week point decides on its own -- being unable to tell is never a reason to accept.
+    """
+    at = max((e.get("at") or 0) for e in departures()) if departures() else 0
+    if not at:
+        return False
+    t = last_api_reply((payload or {}).get("transcript_path") or "")
+    return t is not None and t < at
 
 
 def foreign_report(email, util, window=SWITCH_WINDOW):

@@ -50,6 +50,21 @@ teardown() { [ -n "${HOME:-}" ] && [ "${HOME#/tmp/}" != "$HOME" ] && rm -rf "$HO
 
 live_email() { "$CCEX" ls | awk '/\*/ {print $4}'; }
 
+render_from() {   # render_from <transcript-path> <5h> <weekly>: a payload that says which
+  # session it came from, so provenance rather than the numbers can decide. No reset times:
+  # with no boundary to compare, only the transcript can tell whose numbers these are.
+  rm -f "$CC_PROFILE_ROOT/.usage/.stamp-default"
+  printf '{"transcript_path":"%s","rate_limits":{"five_hour":{"used_percentage":%s},"seven_day":{"used_percentage":%s}}}' \
+    "$1" "$2" "$3" | "$CCEX" record >/dev/null
+}
+
+transcript() {   # transcript <path> <seconds-ago>: a session whose last reply arrived then
+  python3 -c 'import datetime, json, sys, time
+t = datetime.datetime.fromtimestamp(time.time() - float(sys.argv[2]), datetime.timezone.utc)
+json.dump({"type": "assistant", "requestId": "req_1", "timestamp": t.isoformat()},
+          open(sys.argv[1], "w"))' "$1" "$2"
+}
+
 t() {   # t <name> <expected substring> <command...>
   local name=$1 want=$2; shift 2
   local got; got=$("$@" 2>&1)
@@ -317,7 +332,7 @@ out=$("$CCEX" rotate --at 80 2>&1)
 t  "a candidate with no room is passed over" "> c@example.com" echo "$out"
 t  "and that account really is live now"     "c@example.com"   live_email
 t  "and the line says what it really read"   "95% 5h"          echo "$out"
-t  "it seeded the trust it needed"           "seeded folder trust" echo "$out"
+t  "it seeded what it needed to launch"      "onboarding and folder trust" echo "$out"
 
 teardown; setup                 # this time bee really does have room
 fake_claude '{"b@example.com": [12, 20]}'
@@ -479,6 +494,51 @@ t  "the view offers the unmeasured account too"  "nothing has measured yet" \
 t  "and without the check it does not"           "every other account is too" \
    "$CCEX" ls -w --once --at 80 --no-verify
 
+echo "taken from the open pull requests"
+teardown; setup                 # CLAUDE_CONFIG_DIR setups keep the live config inside the dir
+python3 -c 'import json, os, sys
+os.makedirs(sys.argv[1], exist_ok=True)
+json.dump({"oauthAccount": {"emailAddress": "inner@example.com"}},
+          open(os.path.join(sys.argv[1], ".claude.json"), "w"))' "$HOME/.claude"
+t  "the inner config wins when it exists" "inner@example.com" \
+   env CCEX_BASE="$HOME/.claude" CCEX_ROOT="$CC_PROFILE_ROOT" \
+   PYTHONPATH="$(dirname "$CCEX")/../lib/py" python3 -c \
+   'import json, os
+from ccexlib import BASE, cfg_for
+print(json.load(open(cfg_for(BASE)))["oauthAccount"]["emailAddress"])'
+
+teardown; setup                 # parking must leave the slot able to answer a probe later
+python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+c["projects"] = {sys.argv[2]: {"hasTrustDialogAccepted": True}}
+c["theme"] = "dark"
+json.dump(c, open(sys.argv[1], "w"))' "$HOME/.claude.json" "$HOME"
+"$CCEX" use bee --no-check >/dev/null 2>&1
+parked() { python3 -c 'import json,sys
+c = json.load(open(sys.argv[1]))
+print(sorted((c.get("projects") or {}).keys()), c.get("theme"))' \
+  "$CC_PROFILE_ROOT/a/.claude.json"; }
+t  "the parked slot keeps the trust it will need" "$HOME"  parked
+t  "and the rest of the config with it"           "dark"   parked
+
+teardown; setup                 # a session that has not heard from the API since the switch
+"$CCEX" use bee --no-check >/dev/null 2>&1        # now live: b@example.com
+transcript "$HOME/old.jsonl" 600                  # its last reply was ten minutes ago
+render_from "$HOME/old.jsonl" 77 66              # numbers no boundary can place
+filed_b() {   # what b has on file, or "nothing" when the render was refused outright
+  python3 -c 'import json, sys
+try:
+    u = json.load(open(sys.argv[1])).get("utilization") or {}
+except OSError:
+    print("nothing"); raise SystemExit
+print((u.get("five_hour") or {}).get("utilization"))' \
+    "$CC_PROFILE_ROOT/.usage/b_example_com.json"
+}
+t  "a render older than the switch is refused"    "nothing"  filed_b
+transcript "$HOME/new.jsonl" -5                   # a session that has replied since
+render_from "$HOME/new.jsonl" 44 33
+t  "and one newer than it is kept"                "44"       filed_b
+
 echo "a switch you typed"
 teardown; setup                 # cee is spent; naming it anyway must say so before it moves
 spend_five cee 95
@@ -500,6 +560,14 @@ age_numbers
 out=$("$CCEX" use bee 2>&1)
 absent "a switch with room warns about nothing" "rotation will move off" echo "$out"
 t  "and it lands"                            "b@example.com"  live_email
+teardown; setup                 # --no-report is what the live view switches with: ask, stay quiet
+fake_claude '{"b@example.com": [10, 20]}'
+age_numbers
+out=$("$CCEX" use bee --no-report 2>&1)
+t  "--no-report still asks the account"      "1"              calls
+absent "but prints no table"                 "limits for"     echo "$out"
+t  "and switches"                            "b@example.com"  live_email
+
 teardown; setup                 # --no-check means neither the asking nor the report
 fake_claude '{"b@example.com": [10, 20]}'
 age_numbers
@@ -757,6 +825,11 @@ drive '\x1b[D' >/dev/null
 absent "and left puts it back"      "a@example.com"            cat "$CC_PROFILE_ROOT/.pool.json"
 
 teardown; setup
+mkdir -p "$CC_PROFILE_ROOT/.usage"
+printf 'bee' > "$CC_PROFILE_ROOT/.usage/.asking"
+t  "the view says who is being asked" "asking bee"     frame 99
+rm -f "$CC_PROFILE_ROOT/.usage/.asking"
+absent "and stops once nothing is"    "asking bee"     frame 99
 t  "a bad watch flag is refused"  "not a --watch option" "$CCEX" ls -w --bogus
 t  "and a bad duration too"       "cannot read"          "$CCEX" ls -w --every m
 t  "plain ls is untouched by it"  "CHECKED"              "$CCEX" ls
