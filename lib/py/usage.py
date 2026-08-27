@@ -7,7 +7,7 @@ live. Both read them through here, so they never disagree.
 import datetime, os, time
 
 from ccexlib import (BASE, CFG_KEYS, caps, cfg_for, email_for, foreign_report, fresh, held,
-                     held_auto, hm, logged_in, snap_path)
+                     held_auto, hm, id_for, logged_in, snap_path)
 
 GRACE = 60          # a window inside its last minute has effectively already rolled over
 _walk = (0.0, {})   # the last /proc walk, and when
@@ -142,7 +142,7 @@ def account_json(name, d, now=None, pids=None):
     seven, st, si = effective(d, "seven_day", now, c)
     c5, c7 = caps(d)
     running = bool(pids.get(os.path.realpath(d))) if pids is not None else bool(live_sessions(d))
-    return {"name": name, "email": email_for(d), "five": five, "seven": seven,
+    return {"name": name, "id": id_for(d), "email": email_for(d), "five": five, "seven": seven,
             "five_resets": ft, "seven_resets": st, "inferred": fi or si,
             "age_s": int((now or time.time()) - c["fetchedAtMs"] / 1000) if c["fetchedAtMs"] else None,
             "live": c["source"] == "session" and running,
@@ -150,9 +150,14 @@ def account_json(name, d, now=None, pids=None):
             "cap_five": c5, "cap_seven": c7, "logged_in": logged_in(d)}
 
 
+def fill(pct, width):
+    """How many cells of a meter that percentage fills -- one rounding rule for every bar."""
+    return max(0, min(width, int(round((pct or 0) / 100.0 * width))))
+
+
 def bar(pct, width=10):
     """How much of the window is spent, the same meter Claude Code's own statusline draws."""
-    n = max(0, min(width, int(round(pct / 100.0 * width))))
+    n = fill(pct, width)
     return "█" * n + "░" * (width - n)
 
 

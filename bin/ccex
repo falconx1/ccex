@@ -335,9 +335,10 @@ case "$cmd" in
       exec python3 "$CCEX_PY/watch.py" ${wargs[@]+"${wargs[@]}"} ;;
     esac
     how=--no-launch; case " $* " in *" --force "*) how=--force ;; esac
-    case " $* " in *" --json "*)      # the rows the table is drawn from, for anything that reads ccex
-      [ $# -gt 0 ] && [ "${1#-}" = "$1" ] || set -- --all "$@"
-      limits --quiet "$how" "$@"; exit 0 ;;
+    case " $* " in *" --json "*)      # the rows the table is drawn from, for anything that reads
+      all=--all                      # ccex -- every account, unless one is named, in either order
+      for a in "$@"; do case "$a" in -*) ;; *) all= ;; esac; done
+      limits --quiet "$how" ${all:+--all} "$@"; exit 0 ;;
     esac
     if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then limits --quiet "$how" "$@"; exit 0; fi
     cur="${CLAUDE_CONFIG_DIR:-$BASE}"

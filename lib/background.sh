@@ -98,10 +98,12 @@ monitor() {
         --refresh "$rsec" ${verify[@]+"${verify[@]}"}
       ;;
     install)
-      local claude_dir=
-      claude_dir=$(command -v claude 2>/dev/null) && claude_dir="$(dirname "$claude_dir"):" || claude_dir=
-      mkdir -p "$UNIT"
-      cat > "$UNIT/ccex-rotate.service" <<UNITEOF
+      if [ -f "$UNIT/ccex-rotate.timer" ]; then     # from when this woke up instead of watching
+        systemctl --user disable --now ccex-rotate.timer >/dev/null 2>&1 || true
+        rm -f "$UNIT/ccex-rotate.timer"
+        printf 'ccex: replaced the old wake-up timer with a resident watcher\n' >&2
+      fi
+      unit_install ccex-rotate <<UNITEOF
 [Unit]
 Description=ccex: move off a Claude account that is out of room, as soon as it is
 StartLimitIntervalSec=0
@@ -111,22 +113,12 @@ Type=simple
 Restart=always
 RestartSec=10
 Nice=5
-Environment=PATH=$claude_dir%h/.local/bin:/usr/local/bin:/usr/bin:/bin${CC_PROFILE_ROOT:+
-Environment=CC_PROFILE_ROOT=$CC_PROFILE_ROOT}
+$(unit_env)
 ExecStart=$CCEX_BIN rotate --serve --at $at --every $every --refresh $refresh${verify[0]+ ${verify[0]}}
 
 [Install]
 WantedBy=default.target
 UNITEOF
-      if [ -f "$UNIT/ccex-rotate.timer" ]; then     # from when this woke up instead of watching
-        systemctl --user disable --now ccex-rotate.timer >/dev/null 2>&1 || true
-        rm -f "$UNIT/ccex-rotate.timer"
-        printf 'ccex: replaced the old wake-up timer with a resident watcher\n' >&2
-      fi
-      systemctl --user daemon-reload
-      systemctl --user reenable ccex-rotate.service >/dev/null 2>&1 || \
-        systemctl --user enable ccex-rotate.service >/dev/null 2>&1
-      systemctl --user restart ccex-rotate.service
       printf 'ccex: rotating at %s%% the moment a session reports it, checked every %s; logs in %s\n' \
         "$at" "$every" "$ROOT/.usage/rotate.log"
       [ "$rsec" = 0 ] || \
@@ -135,10 +127,9 @@ UNITEOF
         printf 'ccex: it runs while you are logged in; `loginctl enable-linger %s` to keep it running otherwise\n' "$USER" >&2
       ;;
     stop)
-      systemctl --user disable --now ccex-rotate.service 2>/dev/null || true
-      systemctl --user disable --now ccex-rotate.timer 2>/dev/null || true
-      rm -f "$UNIT/ccex-rotate.timer" "$UNIT/ccex-rotate.service" "$ROOT/.usage/daemon.json"
-      systemctl --user daemon-reload
+      systemctl --user disable --now ccex-rotate.timer 2>/dev/null || true   # the old clock, if any
+      rm -f "$UNIT/ccex-rotate.timer" "$ROOT/.usage/daemon.json"
+      unit_remove ccex-rotate
       printf 'ccex: background rotation removed; `ccex rotate --bg` puts it back\n'
       ;;
     status)

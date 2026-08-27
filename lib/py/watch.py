@@ -9,7 +9,7 @@ view never freezes waiting for one.
 import os, re, select, shutil, subprocess, sys, tempfile, termios, threading, time, tty
 
 import burn
-from ccexlib import ROOT, USAGE_DIR, fresh, hm, id_for, save, slots
+from ccexlib import DAEMON, ROOT, USAGE_DIR, fresh, hm, save, slots
 from decide import FIVE_AT, cap, decide, ranked, reads
 from usage import GRACE, account_json, age_text, bar, live_map
 
@@ -26,7 +26,6 @@ def paced(txt):
     """"10s", "5m" -> seconds. What the daemon's own --every says, whichever way it says it."""
     m = re.match(r"\s*(\d+)\s*([smh]?)", txt or "")
     return int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)] if m else 0
-DAEMON = os.path.join(ROOT, ".usage", "daemon.json")     # written by the daemon itself
 LIMITS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "limits.py")
 CCEX = os.environ.get("CCEX_BIN") or "ccex"
 
@@ -250,7 +249,7 @@ class View:
         rows = []
         for name, d in slots():
             a = account_json(name, d, now, self.pids)
-            a["id"] = id_for(d) or 0
+            a["id"] = a["id"] or 0
             burn.note(a["email"], a["five"], a["seven"])
             # Only the forecast reads a rate, and it only forecasts the account you are on.
             forecast = not self.serving and name == "default"
