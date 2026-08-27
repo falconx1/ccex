@@ -106,15 +106,18 @@ minute later as a rotation you didn't ask for:
 
 ```console
 $ ccex use dev-team011
-ccex: dev_team011@jimdrive.com is at 100% 5h / 62% weekly, over 5h - rotation will move off it again
-ccex: ada@example.com -> parked as 'ada'; dev_team011@jimdrive.com -> live
+ccex: dev_team011@jimdrive.com is at 93% 5h / 41% weekly, 5h over its own 60% - handing over to ai006@grytt.co instead (`ccex use dev-team011 --anyway` switches to it regardless)
+ccex: ada@example.com -> parked as 'ada'; ai006@grytt.co -> live
 ```
 
-It still moves — you named it, and holding an account you asked for is not this tool's
-business. The report afterwards reads the same answer, so asking first costs one session
-rather than two. Rotation does its own asking, so this belongs only to a switch you typed.
+An account that turns out to be spent hands over to the next one with room, which is the
+rule rotation follows — naming an account is not an instruction to sit at 93% while the
+daemon moves off it seconds later. `--anyway` is how you say you meant it. If nothing within
+reach has room, nothing moves at all.
 
-Pass `--no-check` to `use` if you'd rather it neither asked nor reported.
+It is the same reading rotation takes, through the same code, into the same trail the live
+view shows, and the report afterwards reads that same answer — so asking first costs one
+session rather than two. Pass `--no-check` if you'd rather it neither asked nor reported.
 
 ### Watching it, live
 
