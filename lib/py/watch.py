@@ -56,7 +56,13 @@ def handover(old, cmd):
             tty.setcbreak(sys.stdin.fileno())
 
 
-def run_lines(cmd, timeout=180):
+# A switch may read up to three accounts before it moves, and each reading is a session
+# launch. Cutting it off part way through is the very failure the temporary file below exists
+# to prevent, so the ceiling follows what a reading is actually allowed to take.
+SWITCH_WAIT = 60 + 3 * int(os.environ.get("CCEX_PROBE_TIMEOUT") or 50)
+
+
+def run_lines(cmd, timeout=SWITCH_WAIT):
     """Run something that switches accounts, and hand back the lines it had to say.
 
     Into a temporary file rather than a pipe. A pipe belongs to this process: if the view

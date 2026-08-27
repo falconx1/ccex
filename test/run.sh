@@ -568,14 +568,34 @@ t  "and one newer than it is kept"                "44"       filed_b
 echo "a switch you typed"
 teardown; setup                 # cee is spent; naming it anyway must say so before it moves
 spend_five cee 95
-fake_claude '{"c@example.com": [95, 30]}'
+fake_claude '{"c@example.com": [95, 30], "b@example.com": [10, 20]}'
 age_numbers
 out=$("$CCEX" use cee 2>&1)
 t  "it asks the account before moving"      "asking cee"      rlog
+t  "and the one it moves on to as well"     "asking bee"      rlog
 t  "and says it has no room"                "5h over 90%"     echo "$out"
 t  "so it hands over to one that has"       "b@example.com"   echo "$out"
 t  "and that is where it lands"             "b@example.com"   live_email
 t  "the trail says why it moved on"         "no room"         step_trail
+
+teardown; setup                 # the account it picks for you has to answer for itself
+spend_five cee 95
+fake_claude '{"c@example.com": [95, 30]}'          # bee will not answer
+age_numbers
+out=$("$CCEX" use cee 2>&1)
+t  "an unverified fall-through is not used"  "nothing moved"  echo "$out"
+t  "so nothing moved at all"                 "a@example.com"  live_email
+
+teardown; setup                 # a slot left over from an earlier park holds the live login
+cp -r "$CC_PROFILE_ROOT/bee" "$CC_PROFILE_ROOT/leftover"
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d.setdefault("claudeAiOauth",{})["account"]={"email_address":"a@example.com"}; json.dump(d,open(p,"w"))' \
+  "$CC_PROFILE_ROOT/leftover/.credentials.json"
+spend_five cee 95
+fake_claude '{"c@example.com": [95, 30], "b@example.com": [10, 20]}'
+age_numbers
+out=$("$CCEX" use cee 2>&1)
+absent "the account already live is not offered" "handing over to a@example.com" echo "$out"
+t      "it picks a real other account instead"   "b@example.com"  live_email
 
 teardown; setup                 # --anyway means you meant it: the spent account goes live
 spend_five cee 95

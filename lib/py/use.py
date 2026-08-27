@@ -84,17 +84,29 @@ if asking and not dry:
     from ask import ask
     step(None)                        # this switch's trail is its own
     step("switching to %s by hand, reading it first" % src_name)
-    tried = set()
+    tried, named = set(), src_name
     while True:
         was = None if row["five"] is None else reads(row)
         st, got = ask(src_name, src_dir, was, lambda: account_json(src_name, src_dir),
-                      ", going by what is on file")
+                      ", going by what is on file" if src_name == named else ", trying the next")
         tried.add(src_name)
         if st == "ok":
             row = got
         spent = no_room(row)
-        if not spent or anyway or len(tried) >= TRIES:
+        # The account you named is used on its numbers on file when it will not answer -- you
+        # asked for it by name, and unverified is not the same as spent. An account this
+        # picked for you is not: landing on numbers nobody could confirm is what rotation
+        # stopped doing, so it moves on to the next one instead.
+        if anyway or (not spent and (st == "ok" or src_name == named)):
             break
+        why = " and ".join(spent) if spent else "could not be asked (%s)" % st
+        if len(tried) >= TRIES:
+            # Somewhere it has to stop, and stopping on a known-spent account nobody asked
+            # for is the worst of both: not what you named, and moved off again in seconds.
+            step("nothing within reach has room, so nothing moved")
+            sys.exit("ccex: asked %d accounts and none of them has room, so nothing moved "
+                     "(`ccex use %s --anyway` switches to it regardless)"
+                     % (len(tried), target))
         rows = [account_json("default", BASE)] + \
                [account_json(n, d) for n, (d, e) in parked.items() if n not in tried]
         # Not the account that is already live: a slot left behind by an earlier park still
@@ -103,15 +115,14 @@ if asking and not dry:
         nxt = next((a for a in ranked(rows, at) if a["name"] in parked
                     and a["email"].lower() != (live_email or "").lower()), None)
         if nxt is None:
-            step("%s has no room (%s) and nothing else does either" % (src_name, spent[0]))
-            sys.exit("ccex: %s is at %d%% 5h / %d%% weekly, %s - and no other account has room, "
-                     "so nothing moved (`ccex use %s --anyway` switches anyway)"
-                     % (src_email, row["five"] or 0, row["seven"] or 0,
-                        " and ".join(spent), target))
-        step("%s has no room (%s), reading %s instead" % (src_name, spent[0], nxt["name"]))
+            step("%s %s, and there is nothing else to read" % (src_name, why))
+            sys.exit("ccex: %s is at %d%% 5h / %d%% weekly, %s - and there is no other account "
+                     "to move to, so nothing moved (`ccex use %s --anyway` switches to it "
+                     "regardless)" % (src_email, row["five"] or 0, row["seven"] or 0, why, target))
+        step("%s has no room (%s), reading %s instead" % (src_name, why, nxt["name"]))
         print("ccex: %s is at %d%% 5h / %d%% weekly, %s - handing over to %s instead "
               "(`ccex use %s --anyway` switches to it regardless)"
-              % (src_email, row["five"] or 0, row["seven"] or 0, " and ".join(spent),
+              % (src_email, row["five"] or 0, row["seven"] or 0, why,
                  nxt["email"], target), file=sys.stderr)
         src_name = nxt["name"]
         src_dir, src_email = parked[src_name]
