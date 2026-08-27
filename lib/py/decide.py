@@ -9,6 +9,11 @@ FIVE_HOUR, SEVEN_DAY = 5 * 3600, 7 * 86400
 FIVE_AT = 90        # the default --at; lib/background.sh's own default has to agree
 WEEKLY_AT = 99      # --at is about the 5-hour window; see default_for()
 
+# How a cap gives way as the week it protects runs out: from two days, five points every
+# twelve hours, and the last five hours are the default -- one window left to spend it in.
+RELAX_FROM, RELAX_EVERY, RELAX_BY, LAST = 48 * 3600, 12 * 3600, 5, 5 * 3600
+REFILL_SOON = 3600      # a 5-hour window this close to over is quota you get twice over
+
 
 def default_for(key, at):
     """The out-of-room percentage for a window nobody has capped.
@@ -21,9 +26,32 @@ def default_for(key, at):
 
 
 def cap(a, key, at):
-    """Where this account runs out: its own cap for that window, or the default if it has none."""
+    """Where this account runs out: its own cap for that window, or the default if it has none.
+
+    A cap is set against a week -- it keeps you from spending the whole of one early and
+    leaving nothing for the days after. As that week ends it is protecting less and less,
+    because what it holds back expires at the reset either way, unspent by you and by anyone
+    else sharing the account. So it gives way on a ladder: five points every twelve hours
+    from two days out, and the default for the last five hours, which is the one window left
+    to spend the week in.
+
+    The 5-hour ceiling is the number other people on a shared account actually feel, so it
+    alone holds until that last band. Nothing is remembered: this is the clock, read, which
+    is why the cap you set is back the moment the new week starts.
+    """
     v = a.get("cap_" + key)
-    return default_for(key, at) if v is None else v
+    if v is None:
+        return default_for(key, at)
+    t = a.get("seven_resets")
+    left = (t - time.time()) if t else None
+    if left is None or left <= 0:
+        return v                          # never measured, or a reset that has already passed
+    if left <= LAST:
+        return default_for(key, at)
+    if key == "five" or left > RELAX_FROM:
+        return v
+    steps = int((RELAX_FROM - left) // RELAX_EVERY) + 1
+    return min(default_for(key, at), v + RELAX_BY * steps)
 
 
 def reads(a):
@@ -32,8 +60,11 @@ def reads(a):
 
 
 def own(a, key, at):
-    return "its own %d%%" % a["cap_" + key] if a.get("cap_" + key) is not None \
-        else "%d%%" % default_for(key, at)
+    v = a.get("cap_" + key)
+    if v is None:
+        return "%d%%" % default_for(key, at)
+    now = cap(a, key, at)
+    return "its own %d%%" % v if now == v else "%d%%, its own %d%% given way to as the week ends" % (now, v)
 
 
 def cost(used, resets_at, window):
@@ -47,6 +78,47 @@ def cost(used, resets_at, window):
         return used                       # no reset time known, so assume you are stuck with it
     left = max(0.0, resets_at - time.time())
     return used * min(1.0, left / window)
+
+
+def reach(a, at):
+    """How much of this account there is to spend soon: what its 5-hour window has left, and
+    the whole of the next one when that one is nearly here.
+
+    An account whose window is minutes from over is worth more than its percentage says, not
+    less: what is left of it goes unspent otherwise, and a full window lands right behind it.
+    An account reading `new` has already reset and is waiting -- a 5-hour window is anchored
+    to first use, so it has no clock running and the whole of it is there when you arrive.
+    """
+    lim = cap(a, "five", at)
+    room = max(0, lim - (a["five"] or 0))
+    t = a.get("five_resets")
+    return room + (lim if t and 0 < t - time.time() <= REFILL_SOON else 0)
+
+
+def pressure(a, at):
+    """How fast this account has to be spent to finish its week: points left per day left.
+
+    A week that ends with points unspent has thrown them away, and the fleet holds more
+    quota than there are hours to spend it in -- so what matters between two accounts is not
+    which one is further along but which one is further behind. An account with a quarter of
+    its week left and five days to spend it is in no danger; one with all of it left and the
+    same five days is where the waste will be, and it goes first.
+    """
+    t = a.get("seven_resets")
+    if not t:
+        return 0.0
+    left = max(0, cap(a, "seven", at) - (a["seven"] or 0))
+    return left / max(1.0, (t - time.time()) / 86400)
+
+
+def capped(a):
+    """Whether this account manages its own share, which is what makes it the fallback.
+
+    An account you capped is one you would rather rotation left alone -- shared with someone,
+    or held in reserve -- so it comes after every account that has no cap of its own, however
+    much either has left. It is reached when nothing else has room, which is what a reserve is.
+    """
+    return a.get("cap_five") is not None or a.get("cap_seven") is not None
 
 
 def usable(a, at):
@@ -68,11 +140,17 @@ def unmeasured(a):
 
 
 def ranked(accounts, at=FIVE_AT, blind=False):
-    """Every account rotation could move to, cheapest first -- the order it picks in.
+    """Every account rotation could move to, most to spend first -- the order it picks in.
 
-    The 5-hour window is what actually stops you working, so it decides. Weekly moves
-    slowly enough that it rarely separates two accounts you would otherwise be choosing
-    between, so it only breaks ties.
+    Uncapped accounts come first, all of them, because a cap is how you say an account is
+    someone else's or held back. Within each group it is what there is to spend that decides
+    -- `reach`, which counts a window about to turn over as the two windows it really is.
+
+    The week breaks ties, by `pressure` -- what it has left against the time it has left to
+    spend it in. Two accounts with the same room now are not the same account to reach for:
+    the one that has to spend fastest to finish its week is the one whose quota is about to
+    go unspent, and the one that could finish any time this week keeps. Equal pressure goes
+    in the order the weeks end.
 
     `blind` adds the accounts nothing has measured, always behind every account that has
     been: a real reading beats a guess, so an unmeasured account is only reached for once
@@ -82,13 +160,30 @@ def ranked(accounts, at=FIVE_AT, blind=False):
     this is all meant to fix.
     """
     room = [a for a in accounts if a["name"] != "default" and usable(a, at)]
-    room.sort(key=lambda a: (cost(a["five"], a["five_resets"], FIVE_HOUR),
+    room.sort(key=lambda a: (capped(a), -reach(a, at), -pressure(a, at),
                              cost(a["seven"], a["seven_resets"], SEVEN_DAY),
                              a["name"]))
     if blind:
         room += sorted((a for a in accounts if a["name"] != "default" and unmeasured(a)),
                        key=lambda a: a["name"])
     return room
+
+
+def listing(accounts, at=FIVE_AT):
+    """Every account in the order a view shows them: live first, then rotation's order.
+
+    A view answers the same question rotation does -- which account is next -- so it reads
+    top down in the order the answer comes: the account in use, then the one a switch would
+    land on, then the one after that. What rotation will not reach at all (held, spent,
+    still capped out) falls to the bottom in account order, where it is a list rather than a
+    queue.
+    """
+    live = [a for a in accounts if a["name"] == "default"]
+    order = ranked(accounts, at, blind=True)
+    seen = {id(a) for a in live + order}
+    rest = sorted((a for a in accounts if id(a) not in seen),
+                  key=lambda a: (a["id"] or 99, a["name"]))
+    return live + order + rest
 
 
 def decide(accounts, at=FIVE_AT, blind=False):

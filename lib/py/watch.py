@@ -10,7 +10,7 @@ import os, re, select, shutil, subprocess, sys, tempfile, termios, threading, ti
 
 import burn
 from ccexlib import DAEMON, ROOT, USAGE_DIR, fresh, hm, save, slots
-from decide import FIVE_AT, cap, decide, ranked, reads
+from decide import FIVE_AT, cap, decide, listing, ranked, reads
 from usage import GRACE, account_json, age_text, bar, live_map
 
 PRESETS = [10, 30, 60, 300, 900, 1800]
@@ -256,11 +256,11 @@ class View:
             a["rate_five"] = burn.rate(a["email"], "five_hour", now) if forecast else None
             a["rate_seven"] = burn.rate(a["email"], "seven_day", now) if forecast else None
             rows.append(a)
-        rows.sort(key=lambda a: (a["id"] or 99, a["name"]))
-        self.rows = rows
         self.timer = self.systemd()
         if not self.at_given and self.timer["at"]:
             self.at = int(self.timer["at"])   # the daemon's threshold is the one that will fire
+        rows = listing(rows, self.at)         # rotation's own order, so the list reads as its queue
+        self.rows = rows
         # `blind` has to match the tick's, or this view predicts NONE while the tick
         # switches to an account nothing has measured. Verification is what reads it.
         self.verdict, _, self.message = decide(rows, self.at, blind=self.verify)
@@ -405,6 +405,8 @@ class View:
             if self.capbuf.get(w):
                 cmd += [flag, str(self.capbuf[w])]
         self.capbuf = {}
+        if len(cmd) == 4:
+            return                     # nothing typed; a bare `pool cap` would set the preset
         self.background("capping", cmd)
 
     def move(self, delta):
@@ -500,7 +502,14 @@ class View:
             elif a["held"]:
                 state, tint = "held", YELLOW
             elif a["cap_five"] or a["cap_seven"]:
-                state, tint = "cap %s/%s" % (a["cap_five"] or "-", a["cap_seven"] or "-"), CYAN
+                # what it is held to now, not what it was set to: a cap gives way as its week
+                # ends, and the view has to say the number rotation is actually using
+                e5, e7 = cap(a, "five", self.at), cap(a, "seven", self.at)
+                gave = (a["cap_five"] and e5 != a["cap_five"]) or \
+                       (a["cap_seven"] and e7 != a["cap_seven"])
+                state = "cap %s/%s%s" % (e5 if a["cap_five"] else "-",
+                                         e7 if a["cap_seven"] else "-", "*" if gave else "")
+                tint = CYAN
             row.add(" " + state, tint, 12)
             if agecol:
                 row.add("live" if a["live"] else age_text(a["age_s"]),

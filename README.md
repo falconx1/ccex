@@ -220,33 +220,39 @@ Moving off an account at 90% of its week would abandon a tenth of it for six day
 90% of a 5-hour window is gone in minutes — so the two windows get different numbers.
 Either one running out is enough to make an account useless to you.
 
-Among the accounts still under the threshold, it ranks on what their usage will actually
-**cost** you, which is not the same as what it reads:
+Among the accounts still under the threshold, it ranks on **how much there is to spend
+soon** — which is not the same as what they read:
 
 ```
-cost = used% x (time left in the window / length of the window)
+reach = (its 5-hour cap - used) + the whole cap again, if that window turns over within the hour
 ```
 
-Quota you're stuck with for the whole window counts in full. Quota that expires in twenty
-minutes counts for almost nothing — the window refills before you could have spent what
-was left of it. **5-hour cost decides; weekly cost only breaks ties**, because the 5-hour
-window is what actually stops you working, while the weekly figure moves too slowly to
-separate two accounts you'd otherwise be choosing between.
+An account minutes from the end of its window is worth *more* than its percentage says, not
+less: what is left of it goes unspent otherwise, and a full window lands right behind it. An
+account reading `new` has already reset and is waiting — a 5-hour window is anchored to first
+use, so it has no clock running and the whole of it is there when you arrive.
 
-That weighting is not cosmetic. Given these four:
+Given these four:
 
 ```
-CANDIDATE       5H          RESETS IN   5H COST   WEEKLY COST
-personal         0% used      2h09m       0.00       0.06      <- picked
-client-acme     11% used      0h29m       1.07       1.87
-team-shared      9% used      1h39m       2.97      22.18
-side-project    88% used      2h09m      37.87       2.25
+CANDIDATE       5H          RESETS IN   REACH   WEEK
+client-acme     36% used     0h15m       144     43%      <- picked
+team-shared      0% used     new          90      3%
+personal         0% used     new          90     71%
+side-project    88% used     2h09m         2     41%
 ```
 
-`side-project` has the second-cheapest week of the four and still comes last: 88% of its
-5-hour window is gone and it has two hours to wait, so it's no use to you now.
-`client-acme` reads worse than `team-shared` on raw 5-hour usage (11% against 9%) but
-costs less, because its window resets in half an hour.
+`client-acme` wins on the two windows it really is: 54 points now and 90 more a quarter of
+an hour later. `personal` and `team-shared` are both whole windows waiting, and `team-shared`
+goes first because **the week breaks ties by pressure** — what it has left, against the days
+it has left to spend it in. `personal` needs a few points a day to finish its week and is in
+no danger of wasting any; `team-shared` has almost the whole week still to spend and the same
+days to do it in, so that is where the quota goes unused if you leave it.
+
+Accounts with a cap of their own come after every account without one, whatever either has
+left. A cap is how you say an account is someone else's or held in reserve, so it is the
+fallback rather than the first choice — reached when nothing uncapped has room, which is
+what a reserve is for.
 
 Eligibility still uses the raw figures — an account has to be usable *now* — but the
 choice between usable accounts is made on cost. `-n` plans without switching.
@@ -475,9 +481,13 @@ $ ccex ls
 ```
 
 A retired account is marked `X` — the same column as the `x` from `ccex pool out`, because
-it is the same state, reached by itself. Nothing brings it back automatically, not even the
-week rolling over: `ccex pool in 1` is the only way, so an account you were saving cannot be
-drained again the moment its window resets while you weren't looking.
+it is the same state, reached by itself. `ccex pool in` is the way back, the same as for a
+hold you placed by hand: an account you spent to the end of its week is one you meant to
+spend, and when it rejoins is your call, not a timer's.
+
+An account under a cap is never retired this way. Its cap is a standing arrangement, and it
+only reaches 99% because that cap gave way in the last hours of its week (see
+[Caps](#caps)) — taking it out there would hold it out of the week starting minutes later.
 
 Only the week does this. Running a 5-hour window down is ordinary rotation — it refills
 while you work — so nothing is retired for it. And rotation still moves you *off* a retired
@@ -495,7 +505,15 @@ ccex: ada.lovelace@gmail.com is out of room at 5h 50%, weekly 30%
 $ ccex pool cap client-acme --5h 95
 ccex: ada@acme.example is out of room at 5h 95%
 ccex: weekly still follows the default (--at for 5h, 99% for the week)
+
+$ ccex pool cap personal
+ccex: ada.lovelace@gmail.com is out of room at 5h 60%, weekly 75%
 ```
+
+With no numbers it applies the shared-account preset — 5h 60%, weekly 75% — which is what a
+cap is nearly always for: enough of every 5-hour window left for whoever else is on the
+account, and a week you can't spend all of by Wednesday. `ccex ls <account>` reads a cap
+back, and shows what is in force if it has begun to give way.
 
 The account is named the same way as everywhere else — the number from `ccex ls`, a slot
 name, an email, or an unambiguous prefix.
@@ -504,6 +522,25 @@ Lower than the default to keep something in reserve — half of every 5-hour win
 week stay unspent on `personal` above, so it is there when you need it rather than being
 drained by rotation first. Higher than `--at` to run an account right down before moving on,
 which is what you want for the account you'd rather bill.
+
+A cap protects a week, so it gives way as that week ends. What it holds back would expire
+at the reset either way — unspent by you, and by anyone else sharing the account:
+
+| time to the weekly reset | the weekly cap in force |
+| --- | --- |
+| more than 48h | the cap you set |
+| from 48h | five points every twelve hours, up to 99% |
+| under 5h | the default, `90/99` — one window left to spend the week in |
+
+So `60/75` walks `60/80` → `60/85` → `60/90` → `60/95` over the last two days, then `90/99`
+for the final five hours. **The 5-hour ceiling holds until that last band.** On a shared account it is the one
+number the other people feel: a week is a budget nobody experiences moment to moment, but a
+5-hour window sitting at 90% is a window they can't use.
+
+Nothing is stored and nothing needs undoing — the schedule is the clock, read — so the cap
+you set is back the moment the new week starts. The `CAP` column shows the percentages in
+force and marks them `*` while they aren't the ones you set; `ccex ls <account>` says it in
+words.
 
 A cap works in both directions, like `--at` does: rotation moves off that account once it
 crosses its own cap, and won't land on it above its cap either. Windows you don't cap keep
@@ -673,11 +710,12 @@ as a percentage, its meter and the clock it comes back on — `new` for one that
 and has had nothing measured since. The live account gets the same row as everyone else,
 marked where its number would be.
 
-The rows are ordered by what the 5-hour window has left, emptiest first, because the menu
-answers one question — which account do I go to — and the account with the most room
-answers it far more often than the account with the lowest number. The numbers stay in
-their column, so `ccex use 5` and the fifth row keep meaning different things on purpose:
-one is the account, the other is wherever it happens to be sitting.
+The rows are in rotation's own order — the account you are on, then the one a switch would
+land on, then the one after that, and at the bottom whatever rotation will not reach at all.
+The menu answers one question, which account do I go to, and the row under the live one is
+that answer. `ccex ls -w` lists them the same way, from the same ranking, so the two agree.
+The numbers stay in their column, so `ccex use 5` and the fifth row keep meaning different
+things on purpose: one is the account, the other is wherever it happens to be sitting.
 
 The meters have three shades where the table has two, because a menu row has neither colour
 nor a `CAP` column to explain itself with:

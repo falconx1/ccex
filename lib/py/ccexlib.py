@@ -378,7 +378,7 @@ CAPS = os.path.join(ROOT, ".caps.json")
 
 def held(d):
     """True when this account is off the rotation list, whether you took it off or rotation did."""
-    return bool(fresh(POOL).get(email_for(d)))
+    return email_for(d) in fresh(POOL)
 
 
 def held_auto(d):
