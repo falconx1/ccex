@@ -6,17 +6,26 @@ slower --every tick, and only that tick walks /proc or asks systemd anything. No
 here starts a session unless --refresh says it may, and then off the render loop, so the
 view never freezes waiting for one.
 """
-import os, select, shutil, subprocess, sys, termios, threading, time, tty
+import os, re, select, shutil, subprocess, sys, tempfile, termios, threading, time, tty
 
 import burn
-from ccexlib import ROOT, fresh, hm, id_for, save, slots
-from decide import FIVE_AT, cap, decide, ranked
+from ccexlib import ROOT, USAGE_DIR, fresh, hm, id_for, save, slots
+from decide import FIVE_AT, cap, decide, ranked, reads
 from usage import GRACE, account_json, age_text, bar, live_map
 
 PRESETS = [10, 30, 60, 300, 900, 1800]
 PROC_EVERY = 15         # seconds between /proc walks: the one read that is not free
 WEEKLY_NEAR = 90        # below this the week is not what the next switch will be about
 NO_UNIT = {"active": False, "legacy": False, "at": None, "refresh": None, "every": None}
+
+
+BEAT = ".beat"       # touched every time the daemon reads the numbers
+
+
+def paced(txt):
+    """"10s", "5m" -> seconds. What the daemon's own --every says, whichever way it says it."""
+    m = re.match(r"\s*(\d+)\s*([smh]?)", txt or "")
+    return int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)] if m else 0
 DAEMON = os.path.join(ROOT, ".usage", "daemon.json")     # written by the daemon itself
 LIMITS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "limits.py")
 CCEX = os.environ.get("CCEX_BIN") or "ccex"
@@ -47,10 +56,24 @@ def handover(old, cmd):
             tty.setcbreak(sys.stdin.fileno())
 
 
-def run_lines(cmd, timeout=180):
-    """Run something that switches accounts, and hand back the lines it had to say."""
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    return [l for l in (out.stdout + out.stderr).splitlines() if l.strip()]
+# A switch may read up to three accounts before it moves, and each reading is a session
+# launch. Cutting it off part way through is the very failure the temporary file below exists
+# to prevent, so the ceiling follows what a reading is actually allowed to take.
+SWITCH_WAIT = 60 + 3 * int(os.environ.get("CCEX_PROBE_TIMEOUT") or 50)
+
+
+def run_lines(cmd, timeout=SWITCH_WAIT):
+    """Run something that switches accounts, and hand back the lines it had to say.
+
+    Into a temporary file rather than a pipe. A pipe belongs to this process: if the view
+    goes away mid-switch -- restarting into new code, or killed -- the read end closes and
+    the switch dies of a broken pipe with the credential half moved. A file has no reader to
+    lose, so the child finishes whatever it was doing either way.
+    """
+    with tempfile.TemporaryFile("w+", errors="replace") as f:
+        subprocess.run(cmd, stdout=f, stderr=f, timeout=timeout)
+        f.seek(0)
+        return [l for l in f.read().splitlines() if l.strip()]
 
 
 def hms(sec):
@@ -143,9 +166,10 @@ def meter(pct, limit, width=10, colour=True):
 
 
 class View:
-    def __init__(self, every=10, at=FIVE_AT, refresh=0, act=False, at_given=False):
+    def __init__(self, every=10, at=FIVE_AT, refresh=0, act=False, at_given=False,
+                 verify=True):
         self.every, self.at, self.refresh, self.act = every, at, refresh, act
-        self.at_given = at_given
+        self.at_given, self.verify = at_given, verify
         self.started = time.time()
         self.rows, self.live = [], None
         self.verdict, self.message = "", ""
@@ -238,7 +262,9 @@ class View:
         self.timer = self.systemd()
         if not self.at_given and self.timer["at"]:
             self.at = int(self.timer["at"])   # the daemon's threshold is the one that will fire
-        self.verdict, _, self.message = decide(rows, self.at)
+        # `blind` has to match the tick's, or this view predicts NONE while the tick
+        # switches to an account nothing has measured. Verification is what reads it.
+        self.verdict, _, self.message = decide(rows, self.at, blind=self.verify)
         self.live = next((a for a in rows if a["name"] == "default"), None)
         if self.live:
             if self.last_live and self.last_live != self.live["email"]:
@@ -254,7 +280,8 @@ class View:
         The view never moves a credential itself. Deciding twice is cheap, and the second
         decision is the authoritative one: `rotate` holds the lock across it.
         """
-        return [CCEX, "rotate", "--tick", "--at", str(self.at), "--refresh", str(self.refresh)]
+        return [CCEX, "rotate", "--tick", "--at", str(self.at), "--refresh", str(self.refresh)] \
+            + ([] if self.verify else ["--no-verify"])
 
     def maybe_act(self):
         """Act on what the last sample said, if this view is the one doing the acting."""
@@ -297,7 +324,9 @@ class View:
         account waiting for it (needs none). The second always answers, so a view with no
         history yet still tells you where you are going.
         """
-        live, room = self.live, ranked(self.rows, self.at)
+        # Same ranking rotation will use, `blind` included, or the account named here is
+        # not the one the switch goes to.
+        live, room = self.live, ranked(self.rows, self.at, blind=self.verify)
         dest = room[0] if room else None
         if not live:
             return None, None, dest, "no live account"
@@ -412,8 +441,23 @@ class View:
             hdr.add("CHECKED", REV, 9)
         L.append(hdr)
 
+        # What rotation is doing right now, one line per thing done, printed below everything
+        # else and gone the moment the next switch starts its own. A switch that asks three
+        # accounts takes most of a minute, and "now" on its own reads like a frozen view.
+        # Anything older than a few minutes is a tick that died without clearing up.
+        trail, age = [], 0
+        try:
+            age = now - os.path.getmtime(os.path.join(USAGE_DIR, ".step"))
+            if age < 300:
+                with open(os.path.join(USAGE_DIR, ".step")) as f:
+                    trail = [l.strip() for l in f.read().splitlines() if l.strip()]
+        except OSError:
+            pass
+
         shown = self.rows
-        room = height - 9 - (1 if self.switches else 0)
+        # The trail is charged to the same height the accounts come out of, so a switch grows
+        # the frame by nothing and the view does not scroll out from under itself.
+        room = height - 9 - (1 if self.switches else 0) - (len(trail) + 1 if trail else 0)
         if len(shown) > room > 0:
             keep = [a for a in shown if a["name"] == "default"][:1]
             shown = (keep + [a for a in shown if a not in keep])[:room]
@@ -484,9 +528,14 @@ class View:
         to = Line().add("              ", "")
         if dest:
             to.add("-> ", GREY).add("%s %s" % (dest["id"], dest["email"]), GREEN + BOLD)
-            to.add(" at %d%% 5h / %d%% weekly" % (dest["five"], dest["seven"]))
-            if dest["age_s"] and dest["age_s"] > 900:
-                to.add(" (numbers %dm old)" % (dest["age_s"] // 60), GREY)
+            if dest["five"] is None or dest["seven"] is None:
+                # Reached only once every measured account is spent. There is no percentage
+                # to draw, and the switch reads it before landing on it.
+                to.add(", which nothing has measured yet", GREY)
+            else:
+                to.add(" at %s" % reads(dest))
+                if dest["age_s"] and dest["age_s"] > 900:
+                    to.add(" (numbers %dm old)" % (dest["age_s"] // 60), GREY)
         elif self.verdict != "SWITCH":
             to.add("no account is under its cap right now", RED)
         if resets_first and best:
@@ -497,7 +546,16 @@ class View:
         rot = Line().add(" rotation     ", BOLD)
         if t["active"]:
             rot.add("rotating on data change", GREEN)
-            rot.add(", every %s at %s%%" % (t["every"] or "?", t["at"] or "?"))
+            # When the next read is due. The daemon also wakes on a data change, so it can
+            # come sooner than this -- never later, which is what makes it worth counting.
+            due, ev = "", paced(t["every"])
+            try:
+                left = ev - (now - os.path.getmtime(os.path.join(USAGE_DIR, BEAT)))
+                if ev:
+                    due = ", next read due now" if left < 1 else ", next read in %ds" % round(left)
+            except OSError:
+                pass
+            rot.add(", every %s%s at %s%%" % (t["every"] or "?", due, t["at"] or "?"))
             if t["refresh"]:
                 rot.add(", one real check after %ss of silence" % t["refresh"])
         elif t.get("legacy"):
@@ -546,6 +604,15 @@ class View:
             keys.add("q", REV).add(" quit   ")
             keys.add("up %s" % hm(now - self.started), GREY)
         L.append(keys)
+
+        if trail:
+            L.append(Line().add(" switching    ", BOLD)
+                     .add(hm_short(int(age)) + " ago", GREY))
+            for i, one in enumerate(trail):
+                last = i == len(trail) - 1
+                L.append(Line().add("              ", "")
+                         .add(("-> " if last else "   "), GREY)
+                         .add(one, YELLOW if last else GREY))
         return [l.render(width, colour) for l in L]
 
 
@@ -571,6 +638,11 @@ def serve(v):
            if v.refresh else ""), flush=True)
     while True:
         v.sample()
+        try:                # one stat's worth of "I just looked", for the countdown to use
+            with open(os.path.join(USAGE_DIR, BEAT), "w") as f:
+                f.write(v.message + "\n")
+        except OSError:
+            pass
         due = v.refresh and time.time() - beat >= v.refresh
         if v.verdict == "SWITCH" or due:
             beat = time.time()
@@ -588,7 +660,7 @@ def serve(v):
                     f.write("%s\nccex: %s\n" % (time.strftime("%F %T"), v.message))
             except OSError:
                 pass
-        if v.mtime() != v.stamp:
+        if v.mtime() != v.stamp and not v.busy:
             print("ccex: ccex was updated; restarting into it", flush=True)
             return 0                   # Restart=always brings it straight back, on new code
         time.sleep(v.every)
@@ -597,6 +669,7 @@ def serve(v):
 def main():
     argv = sys.argv[1:]
     every, at, refresh, act, once = 10, FIVE_AT, 0, False, "--once" in argv
+    verify = "--no-verify" not in argv
     at_given = False
     for i, a in enumerate(argv):
         if a == "--every" and i + 1 < len(argv):
@@ -608,10 +681,10 @@ def main():
         elif a == "--rotate":
             act = True
     if "--serve" in argv:
-        v = View(every, at, refresh, False, at_given)
+        v = View(every, at, refresh, False, at_given, verify)
         v.serving = True
         return serve(v)
-    v = View(every, at, refresh, act, at_given)
+    v = View(every, at, refresh, act, at_given, verify)
     v.sample()
 
     tty_in, tty_out = sys.stdin.isatty(), sys.stdout.isatty()
@@ -690,7 +763,7 @@ def main():
                 elif key in ("\r", "\n"):
                     on = v.picked() or v.selected()
                     if on and on["name"] != "default":
-                        v.background("switching", [CCEX, "use", on["email"], "--no-check"])
+                        v.background("switching", [CCEX, "use", on["email"], "--no-report"])
                     v.typed = ""
                 elif key.isdigit() and (v.typed or key != "0") and len(v.typed) < 3:
                     # The numbers in the # column are the ones `ccex use` takes, so typing
@@ -702,7 +775,7 @@ def main():
                 elif key in ("\x7f", "\b") and v.typed:
                     v.typed = v.typed[:-1]
                 elif key in ("y", "Y") and v.picked():
-                    v.background("switching", [CCEX, "use", v.picked()["email"], "--no-check"])
+                    v.background("switching", [CCEX, "use", v.picked()["email"], "--no-report"])
                     v.typed = ""
                 elif key in ("a", "A"):
                     v.typed = ""
@@ -725,7 +798,11 @@ def main():
             if time.time() - v.sampled >= v.every:
                 v.sample()
                 v.maybe_act()
-                if v.mtime() != v.stamp:  # ccex changed under us: restart into the new code
+                # ccex changed under us: restart into the new code -- but not while a
+                # switch is running in the background. Replacing this process closes the
+                # pipes its child is writing to, and the child dies on its next line, half
+                # way through moving a credential. It restarts on the next tick instead.
+                if v.mtime() != v.stamp and not v.busy:
                     sys.stdout.write("\033[?25h\033[?1049l")
                     sys.stdout.flush()
                     if old:

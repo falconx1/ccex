@@ -21,6 +21,9 @@ rotate_now() {
             case " $* " in *" -n "*|*" --dry-run "*) printf 'ccex: dry run, nothing written\n'; return 0 ;; esac
             local rc=0
             do_use "$pick" ${pass[@]+"${pass[@]}"} || rc=$?
+            # The trail stays after the switch on purpose: it is the only account of what
+            # just happened, and the view has nowhere else to read it from. The next switch
+            # clears it (`step(None)`), and it ages out of the view on its own.
             case "$rc" in
               0) ;;
               3) printf 'ccex: %s was already live; nothing moved\n' "$pick" ;;

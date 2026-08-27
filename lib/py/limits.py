@@ -1,12 +1,12 @@
 """Report the 5-hour and weekly limits for one account or all of them.
 
-Nothing here spends quota: the numbers come from a running session, from what was
-last measured, or from the clock. Only the live account is ever asked directly.
+The numbers come from a running session, from what was last measured, or from the clock.
+Only `--force` asks an account directly, which is the one thing here that starts a session.
 """
-import json, os, pty, select, signal, sys, time
+import json, sys, time
 
-from ccexlib import (BASE, caps, cfg_for, creds_for, email_for, expand, held, held_auto,
-                     id_for, is_base, load, slots)
+from ccexlib import BASE, caps, email_for, expand, held, held_auto, id_for, is_base, slots
+from probe import NOTE, probe
 from usage import (account_json, age, cached, compact, live_sessions, still_counting,
                    window)
 
@@ -33,92 +33,6 @@ for i, a in enumerate(argv):
 if skip:
     sys.exit("ccex: --max-age wants a number of seconds")
 
-
-def trusted_dir(cfg):
-    for path, v in (load(cfg).get("projects") or {}).items():
-        if isinstance(v, dict) and v.get("hasTrustDialogAccepted") and os.path.isdir(path):
-            return path
-    return None
-
-def probe(d, timeout=50):
-    """Launch the real `claude` TUI on this account, open /usage, quit. No inference, no cost."""
-    cfg = cfg_for(d)
-    before = cached(d).get("fetchedAtMs") or 0
-    cwd = trusted_dir(cfg)
-    if not cwd:
-        return "untrusted"
-    if not os.path.exists(creds_for(d)):
-        return "nologin"
-    pid, fd = pty.fork()
-    if pid == 0:
-        for k in list(os.environ):
-            if k.startswith("CLAUDE_CODE_") or k in ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT"):
-                os.environ.pop(k, None)
-        if is_base(d):
-            os.environ.pop("CLAUDE_CONFIG_DIR", None)
-        else:
-            os.environ["CLAUDE_CONFIG_DIR"] = d
-        os.environ.update(TERM="xterm-256color", COLUMNS="120", LINES="45")
-        try:
-            os.chdir(cwd)
-            os.execvp("claude", ["claude", "--model", "claude-haiku-4-5-20251001"])
-        except Exception:
-            os._exit(127)
-    start = time.time()
-    sent, refreshed, quit_at, mtime, buf, ready_at, tries = set(), False, None, 0, b"", None, 0
-    while time.time() - start < timeout:
-        r, _, _ = select.select([fd], [], [], 0.3)
-        if r:
-            try:
-                chunk = os.read(fd, 65536)
-                if not chunk:
-                    break
-                buf = (buf + chunk)[-8192:]
-            except OSError:
-                break
-        el = time.time() - start
-        if ready_at is None and (b"\xe2\x9d\xaf" in buf or b"shift+tab" in buf):
-            ready_at = time.time()          # the prompt is up; the TUI is listening
-        if not refreshed and ready_at and time.time() - ready_at > 1.5 and tries * 7 < el - 1:
-            os.write(fd, b"\x1b/usage\r")  # esc first, so a retry never appends to a live prompt
-            tries += 1
-            sent.add("usage")
-        if el > 20 and not refreshed and "nudge" not in sent:
-            os.write(fd, b"\r"); sent.add("nudge")
-        if not refreshed:
-            try:
-                m = os.stat(cfg).st_mtime
-            except OSError:
-                m = mtime
-            if m != mtime:
-                mtime = m
-                refreshed = (cached(d).get("fetchedAtMs") or 0) > before
-        if (refreshed or el > timeout - 6) and "quit" not in sent:
-            os.write(fd, b"/exit\r"); sent.add("quit"); quit_at = time.time()
-        if quit_at and time.time() - quit_at > 2:
-            break
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.kill(pid, sig); time.sleep(0.3)
-        except OSError:
-            break
-    try:
-        os.waitpid(pid, os.WNOHANG)
-    except OSError:
-        pass
-    try:
-        os.close(fd)
-    except OSError:
-        pass
-    return "ok" if (cached(d).get("fetchedAtMs") or 0) > before else "timeout"
-
-
-NOTE = {"untrusted": "no trusted project dir - launch `claude` once in one of your project folders first; showing cached numbers",
-        "nologin": "not logged in",
-        "timeout": "limits check timed out; showing cached numbers",
-        "unhooked": "a session is open on this account, so nothing was launched. For live numbers put "
-                    "`ccex record |` in front of your statusLine command (see `ccex --help`); "
-                    "showing cached numbers"}
 
 targets = []
 if every:
@@ -147,8 +61,8 @@ for name, d in targets:
         st = "ok"                      # someone checked moments ago; no reason to ask again
     elif have["fetchedAtMs"] and not still_counting(d) and not force:
         st = "ok"                      # every window it knew about has since reset, so 0% is certain
-    elif not is_base(d):
-        st = "parked"                  # not the account you are running; leave it alone until it is
+    elif not is_base(d) and not force:
+        st = "parked"                  # not the account you are running; leave it alone until asked
     elif live_sessions(d) and not force:
         st = "unhooked"                # never start a second session behind a running one
     elif too_old:
