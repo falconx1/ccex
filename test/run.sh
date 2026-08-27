@@ -112,6 +112,9 @@ json_rows() { "$CCEX" ls "$@" --json | python3 -c 'import json,sys; print(len(js
 t  "ls --json is every account"  "3"                    json_rows
 t  "ls <account> --json is one"  "1"                    json_rows bee
 t  "ls --json carries the email" '"email": "b@example.com"' "$CCEX" ls bee --json
+t  "ls --json carries the number" '"id": 2'                "$CCEX" ls bee --json
+json_first() { "$CCEX" ls --json "$@" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'; }
+t  "--json before the account too" "1"                     json_first bee
 
 echo "switching"
 t  "use by name"                 "b@example.com -> live" "$CCEX" use bee --no-check
@@ -986,7 +989,9 @@ t  "a window that resets first"    "resets first"        burn_says resets
 t  "a reset does not read as negative" "36%/h"           burn_says backwards
 
 echo "the top bar"
-t  "tray says how to start it"   "ccex tray --install"  "$CCEX" tray --status
+# `systemctl --user` answers for the machine, not for this fake HOME, so the assertion has
+# to hold whether or not whoever runs the suite has the tray installed.
+t  "tray says where it stands"   "top bar"              "$CCEX" tray --status
 t  "tray rejects unknown flags"  "unknown option"       "$CCEX" tray --nope
 exits "tray --nope exits 1"      1                      "$CCEX" tray --nope
 

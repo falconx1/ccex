@@ -29,6 +29,30 @@ with_lock() {   # the daemon and an interactive switch must not interleave
     "$@" ) 9>"$ROOT/.lock"
 }
 
+unit_install() {   # unit_install <name>, with the unit body on stdin: write it, then run it
+  mkdir -p "$UNIT"
+  cat > "$UNIT/$1.service"
+  systemctl --user daemon-reload
+  systemctl --user reenable "$1.service" >/dev/null 2>&1 || \
+    systemctl --user enable "$1.service" >/dev/null 2>&1
+  systemctl --user restart "$1.service"
+}
+
+unit_remove() {
+  systemctl --user disable --now "$1.service" 2>/dev/null || true
+  rm -f "$UNIT/$1.service"
+  systemctl --user daemon-reload
+}
+
+unit_env() {   # what every ccex unit needs in its environment: `claude` on PATH, because a
+  # switch may ask an account what it has left, and the profile root if this ccex was told one.
+  # Command substitution eats the trailing newline, so this goes on a line of its own in a unit
+  local c=
+  c=$(command -v claude 2>/dev/null) && c="$(dirname "$c"):" || c=
+  printf 'Environment=PATH=%s%%h/.local/bin:/usr/local/bin:/usr/bin:/bin\n' "$c"
+  [ -z "${CC_PROFILE_ROOT:-}" ] || printf 'Environment=CC_PROFILE_ROOT=%s\n' "$CC_PROFILE_ROOT"
+}
+
 dir_for() {
   case "$1" in
     default) printf '%s\n' "$BASE" ;;

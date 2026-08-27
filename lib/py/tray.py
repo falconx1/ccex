@@ -28,9 +28,9 @@ if IND is None:
 
 from gi.repository import Gio, GLib, Gtk    # noqa: E402  -- after require_version, as gi insists
 
-from ccexlib import BASE, ROOT, canon, hm, id_for, load, slots
-from decide import FIVE_AT, cap
-from usage import GRACE, account_json, live_map
+from ccexlib import canon, hm, is_base, running_at, slots
+from decide import FIVE_AT, cap, reads
+from usage import GRACE, account_json, fill
 
 CCEX = os.environ.get("CCEX_BIN") or "ccex"
 SHARE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -82,8 +82,8 @@ def meter(p, limit):
     # A window nobody has measured is drawn as the empty one it is, not as an unavailable
     # one: ░ means "you will never be allowed to spend this", and a fresh account is the
     # opposite of that. The row says `new` beside it either way.
-    used = int(round(min(p or 0, 100) / 100.0 * WIDTH))
-    room = max(0, int(round(min(limit, 100) / 100.0 * WIDTH)) - used)
+    used = fill(min(p or 0, 100), WIDTH)
+    room = max(0, fill(min(limit, 100), WIDTH) - used)
     return USED * used + ROOM * room + OVER * (WIDTH - used - room)
 
 
@@ -101,24 +101,17 @@ def left(t, now):
     return hm(t - now) if t and t - now > GRACE else "new"
 
 
-def threshold():
-    """What rotation is actually running at, which is not always the built-in default.
-
-    Warning about 90% while the daemon moves off at 80% would be a warning about the wrong
-    number -- and about a switch that already happened.
-    """
-    at = load(os.path.join(ROOT, ".usage", "daemon.json")).get("at")
-    return int(at) if str(at or "").isdigit() else FIVE_AT
-
-
 def read():
-    """Every account as the panel draws it: the live one, then the rest in `ccex ls` order."""
-    now, pids = time.time(), live_map()
-    rows = []
+    """Every account as the panel draws it, emptiest 5-hour window first.
+
+    The empty `pids` is what keeps a resident panel cheap: it is the one argument that
+    stops `account_json` walking /proc for `live`, which is a field no row here draws and
+    most of what a tick would otherwise cost.
+    """
+    now, rows = time.time(), []
     for name, d in slots():
-        a = account_json(name, d, now, pids)
-        a["id"] = id_for(d)
-        a["current"] = os.path.realpath(d) == os.path.realpath(BASE)
+        a = account_json(name, d, now, {})
+        a["current"] = is_base(d)
         a["short"] = canon(a["email"]) if a["email"] else name
         rows.append(a)
     # Emptiest 5-hour window first. The menu answers one question -- which account do I go
@@ -217,7 +210,6 @@ class Tray:
         self.menu = Gtk.Menu()
         self.ind.set_menu(self.menu)
         self.items = {}       # email -> the row that switches to it, so a tick can relabel it
-        self.head = None
         self.shape = None     # which accounts the menu was built for
         self.busy = False     # a switch is out; the numbers it lands on are the ones to show
         self.on = None        # who was live at the last tick, so a move can announce itself
@@ -245,20 +237,18 @@ class Tray:
             self.build(others)
             self.shape = shape
         self.cols.measure(rows, now)
-        at = threshold()      # where rotation is really moving off, which is what a cap caps
+        at = running_at(FIVE_AT)   # where rotation is really moving off, which is what caps cap
         self.head.set_label(row_label(here, now, self.cols, at) if here
                             else "no account is logged in")
         for a in others:
-            item = self.items.get(a["email"])
-            if item:
-                item.set_label(row_label(a, now, self.cols, at))
+            self.items[a["email"]].set_label(row_label(a, now, self.cols, at))
         if not self.busy:
             self.ind.set_label("" if here is None else "%s %s" % (here["short"],
                                                                  (pct(here["five"])).strip()),
                                GUIDE)
         self.moved(here, now)
         if here:
-            self.nearly(here)
+            self.nearly(here, at)
 
     def moved(self, here, now):
         """One place says an account changed, whoever changed it.
@@ -270,18 +260,15 @@ class Tray:
         was, self.on = self.on, here and here["email"]
         if was and self.on and was != self.on:
             notify("now on %s" % here["short"],
-                   "5h %s  ·  week %s  ·  5h window resets %s"
-                   % (pct(here["five"]).strip(), pct(here["seven"]).strip(),
-                      left(here["five_resets"], now)))
+                   "%s  ·  5h window resets %s" % (reads(here), left(here["five_resets"], now)))
 
-    def nearly(self, a):
+    def nearly(self, a, at):
         """A word before rotation moves, not after: this account is nearly out of room.
 
         Once per window, not once per tick -- the reset time is what re-arms it, so a
         window that starts over can warn again and one that is simply sitting at 87% does
         not say so every ten seconds.
         """
-        at = threshold()
         for key, word in (("five", "5h"), ("seven", "weekly")):
             limit, p = cap(a, key, at), a[key]
             if p is None or not limit - NEAR <= p < limit:

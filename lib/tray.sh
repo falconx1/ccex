@@ -32,16 +32,12 @@ tray() {
   local sub=${1:-run}
   case "$sub" in
     run)
-      tray_needs
-      exec python3 "$CCEX_PY/tray.py" ;;
+      exec python3 "$CCEX_PY/tray.py" ;;     # which says the same thing about a missing typelib
     install)
-      local claude_dir=
       tray_needs
-      claude_dir=$(command -v claude 2>/dev/null) && claude_dir="$(dirname "$claude_dir"):" || claude_dir=
-      mkdir -p "$UNIT"
       # Bound to the desktop session rather than to login: an indicator with no session to
       # sit in has nowhere to draw itself, and would restart forever trying.
-      cat > "$UNIT/ccex-tray.service" <<UNITEOF
+      unit_install ccex-tray <<UNITEOF
 [Unit]
 Description=ccex: the live Claude account in the top bar
 PartOf=graphical-session.target
@@ -52,22 +48,15 @@ Type=simple
 Restart=on-failure
 RestartSec=10
 Nice=5
-Environment=PATH=$claude_dir%h/.local/bin:/usr/local/bin:/usr/bin:/bin${CC_PROFILE_ROOT:+
-Environment=CC_PROFILE_ROOT=$CC_PROFILE_ROOT}
+$(unit_env)
 ExecStart=$CCEX_BIN tray
 
 [Install]
 WantedBy=graphical-session.target
 UNITEOF
-      systemctl --user daemon-reload
-      systemctl --user reenable ccex-tray.service >/dev/null 2>&1 || \
-        systemctl --user enable ccex-tray.service >/dev/null 2>&1
-      systemctl --user restart ccex-tray.service
       printf 'ccex: in the top bar now, and at every login (ccex tray --stop removes it)\n' ;;
     stop)
-      systemctl --user disable --now ccex-tray.service 2>/dev/null || true
-      rm -f "$UNIT/ccex-tray.service"
-      systemctl --user daemon-reload
+      unit_remove ccex-tray
       printf 'ccex: out of the top bar; `ccex tray --install` puts it back\n' ;;
     status)
       if systemctl --user is-active ccex-tray.service >/dev/null 2>&1; then

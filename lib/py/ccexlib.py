@@ -10,6 +10,7 @@ ROOT = os.environ.get("CCEX_ROOT") or os.path.expanduser("~/.claude-profiles")
 USAGE_DIR = os.path.join(ROOT, ".usage")
 STEP = os.path.join(USAGE_DIR, ".step")       # what a switch is doing, while it is doing it
 LOG = os.path.join(USAGE_DIR, "rotate.log")   # and afterwards, whether it switched or not
+DAEMON = os.path.join(USAGE_DIR, "daemon.json")   # what the background rotator is running at
 STEPS = 5                                     # lines of trail the view has room for
 
 
@@ -84,6 +85,17 @@ def save(path, obj, unique=False):
 
 
 _base_real = None
+
+
+def running_at(default):
+    """The threshold rotation is really moving off at, or `default` when nothing is running.
+
+    Reading 90% off the built-in default while the daemon moves off at 80% would be reading
+    the wrong number -- and, for anything that warns, warning about a switch that already
+    happened. `ccex rotate --stop` deletes the file, so the default is what is left.
+    """
+    at = fresh(DAEMON).get("at")
+    return int(at) if str(at or "").isdigit() else default
 
 
 def is_base(d):

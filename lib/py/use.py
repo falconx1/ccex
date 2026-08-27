@@ -2,7 +2,7 @@
 import os, shutil, sys, time
 
 from ccexlib import (BASE, ROOT, canon, cfg_for, creds_for, email_for, expand, held,
-                     id_for, load, logged_in, note_switch, save, seed_into, step)
+                     id_for, load, logged_in, note_switch, running_at, save, seed_into, step)
 from decide import FIVE_AT, cap, own, ranked, reads
 from usage import account_json, cached
 
@@ -60,8 +60,7 @@ def taken(d):
 # default. Warning about 90% while the daemon moves off at 80% would stay quiet about exactly
 # the switch it is about to undo.
 row = account_json(src_name, src_dir)
-running = load(os.path.join(ROOT, ".usage", "daemon.json")).get("at")
-at = int(running) if str(running or "").isdigit() else FIVE_AT
+at = running_at(FIVE_AT)
 
 
 def no_room(a):
