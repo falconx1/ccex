@@ -40,7 +40,7 @@ def trusted_dir(cfg):
             return path
     return None
 
-def probe(d, timeout=50):
+def probe(d, timeout=int(os.environ.get("CCEX_PROBE_TIMEOUT") or 150)):
     """Launch the real `claude` TUI on this account, open /usage, quit. No inference, no cost."""
     cfg = cfg_for(d)
     before = cached(d).get("fetchedAtMs") or 0
@@ -54,10 +54,10 @@ def probe(d, timeout=50):
         for k in list(os.environ):
             if k.startswith("CLAUDE_CODE_") or k in ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT"):
                 os.environ.pop(k, None)
-        if is_base(d):
-            os.environ.pop("CLAUDE_CONFIG_DIR", None)
-        else:
+        if cfg == os.path.join(d, ".claude.json"):
             os.environ["CLAUDE_CONFIG_DIR"] = d
+        else:
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
         os.environ.update(TERM="xterm-256color", COLUMNS="120", LINES="45")
         try:
             os.chdir(cwd)

@@ -71,8 +71,18 @@ def is_base(d):
 
 
 def cfg_for(d):
-    """Where this slot keeps its config. The live slot's is ~/.claude.json, not inside ~/.claude."""
-    return os.path.expanduser("~/.claude.json") if is_base(d) else os.path.join(d, ".claude.json")
+    """Where this slot keeps its config.
+
+    The live slot's is ~/.claude.json only while CLAUDE_CONFIG_DIR is unset. Export it —
+    as a multi-account shell setup does — and Claude Code writes $CLAUDE_CONFIG_DIR/.claude.json
+    instead, leaving ~/.claude.json a stale file no session reads. Preferring the inner one
+    when it exists is what keeps `use` parking under the account that was really live, rather
+    than under whatever name that stale file last held.
+    """
+    if not is_base(d):
+        return os.path.join(d, ".claude.json")
+    inner = os.path.join(BASE, ".claude.json")
+    return inner if os.path.exists(inner) else os.path.expanduser("~/.claude.json")
 
 
 def creds_for(d):
