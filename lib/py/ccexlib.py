@@ -3,7 +3,7 @@
 The bash side exports CCEX_BASE and CCEX_ROOT so every module agrees on where
 the live account and the parked ones live.
 """
-import json, os, re, time
+import datetime, json, os, re, time
 
 BASE = os.environ.get("CCEX_BASE") or os.path.expanduser("~/.claude")
 ROOT = os.environ.get("CCEX_ROOT") or os.path.expanduser("~/.claude-profiles")
@@ -40,7 +40,6 @@ def seed_into(dst, src):
     for k, v in (src.get("projects") or {}).items():
         proj.setdefault(k, v)
     return len(proj)
-
 
 
 def fresh(path, keep=None):
@@ -136,32 +135,163 @@ def snap_path(email):
     return os.path.join(USAGE_DIR, re.sub(r"[^A-Za-z0-9]+", "_", email.lower()) + ".json")
 
 
+def _ts(v):
+    """A window boundary as epoch seconds, whichever way it was written.
+
+    A statusline payload carries a whole-second epoch, so `record` renders it with no
+    fraction; a probe lets Claude Code write its own, microseconds and all -- and the two
+    land a quarter-second either side of a minute. Compared as strings, an account's own
+    window reads as a different window.
+    """
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return datetime.datetime.fromisoformat(v).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def past_window(util, slack=120):
+    """True when a payload names a window boundary that has already gone by.
+
+    A window a session is really in has not reset yet, so its boundary is ahead of now. A
+    boundary days behind is a session that made its last request under a different account
+    and has re-rendered ever since without asking anyone -- statusline output costs no
+    request, so nothing ever corrects it. Cheapest check there is, and it needs no history.
+    """
+    now = time.time()
+    for v in (util or {}).values():
+        t = _ts((v or {}).get("resets_at"))
+        if t is not None and t < now - slack:
+            return True
+    return False
+
+
+def foreign_window(prev, util, slack=120):
+    """True when a payload names a boundary this account cannot have moved to yet.
+
+    A window's boundary only advances once the old one has passed. So a report naming a
+    different boundary while the one we last measured is still in the future did not come
+    from this account: it is a session that has not caught up with a switch. Deciding that
+    needs nothing but this account's own file -- no switch record rotation keeps
+    overwriting, no other account's snapshot that a reset may have removed.
+
+    There is deliberately no way out by capitulation. A refusal that eventually believes a
+    payload it cannot verify is a refusal a persistent liar wins, and idle sessions repeat
+    themselves for days. What breaks the deadlock instead is `limits.probe`, which asks the
+    account itself.
+    """
+    # cm:edge protocol -> lib/py/limits.py — refusing every report freezes this account's
+    # numbers, and rotation steers by them. limits.py and watch.py must probe a live account
+    # whose snapshot has aged out, rather than trusting that an open session is a reporting one.
+    now = time.time()
+    known = prev.get("utilization") or {}
+    for k, v in (util or {}).items():
+        old = _ts((known.get(k) or {}).get("resets_at"))
+        new = _ts((v or {}).get("resets_at"))
+        if old is None or new is None or old <= now:
+            continue
+        if abs(new - old) > slack:
+            return True
+    return False
+
+
 SWITCH = os.path.join(USAGE_DIR, ".switch.json")
 
 
-def note_switch(email, five, seven):
-    """Remember what the account we are switching away from was reading.
+def note_switch(email, util):
+    """Remember which windows the account we are switching away from was reading.
 
-    A session that renders just after a switch still carries the old account's limits --
-    Claude Code only learns the new ones on its next request -- while `.claude.json`
-    already names the new account. Filing those numbers would credit an hour of someone
-    else's usage to the account you just moved to, and the burn rate would follow. So the
-    numbers we are leaving behind are written down, and recognised if they turn up again.
+    `foreign_window` decides from what the incoming account itself last measured, which is
+    nothing at all the first time an account is used. That is exactly when a late render is
+    most likely -- a switch just happened -- so the windows being left behind are written
+    down, and recognised if they turn up under the new name.
+
+    Reset times, not percentages: a lagging session re-renders every few seconds and its
+    percentages drift, so matching on those misses everything after the first render. The
+    boundary it carries stays the one the old account had until its next request.
     """
     try:
         os.makedirs(USAGE_DIR, exist_ok=True)
-        save(SWITCH, {"at": int(time.time()), "email": email, "five": five, "seven": seven})
+        save(SWITCH, {"at": int(time.time()), "email": email,
+                      "bounds": {k: (util.get(k) or {}).get("resets_at")
+                                 for k in ("five_hour", "seven_day")},
+                      "five": (util.get("five_hour") or {}).get("utilization"),
+                      "seven": (util.get("seven_day") or {}).get("utilization")})
     except OSError:
         pass
 
 
-def stale_report(five, seven, window=600):
-    """True when these are the numbers the account we just switched away from had."""
-    s = load(SWITCH)
-    if not s or (five is None and seven is None):
+def last_api_reply(path, tail=1 << 18):
+    """When this session last had a reply from the API, or None if it cannot be told.
+
+    A statusline render costs no request, so a session's rate limits are exactly as old as
+    its last reply -- and nothing the statusline hands over says which account answered it.
+    The transcript does say when it arrived, and that is enough.
+
+    Only main-thread assistant lines with a request behind them count: metadata lines carry
+    no exchange, and a subagent's replies do not refresh what the statusline renders.
+    """
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - tail))
+            chunk = f.read().decode("utf-8", "ignore")
+    except OSError:
+        return None
+    for line in reversed(chunk.splitlines()):
+        if '"assistant"' not in line or '"requestId"' not in line:
+            continue
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue                  # a tail can start mid-line; the next one up is whole
+        if o.get("type") != "assistant" or o.get("isSidechain") or not o.get("timestamp"):
+            continue
+        try:
+            return datetime.datetime.fromisoformat(o["timestamp"].replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+def lagging_session(payload):
+    """True when this session has not heard from the API since the last account switch.
+
+    Provenance, where the two checks above only have coincidence to go on: numbers that
+    reached a session before the switch were answered by the account we have since left,
+    whatever they happen to look like.
+
+    One switch time is all this needs, which is why `.switch.json` holding a single slot is
+    no longer the weakness it was for `stale_report`: time is ordered, so a session that
+    predates the newest switch predates every earlier one too.
+
+    It abstains rather than guesses. No switch on record, or no readable transcript, and
+    the boundary checks decide -- being unable to tell is never a reason to accept.
+    """
+    at = load(SWITCH).get("at")
+    if not at:
         return False
-    return time.time() - (s.get("at") or 0) < window and \
-        (five, seven) == (s.get("five"), s.get("seven"))
+    t = last_api_reply(payload.get("transcript_path") or "")
+    return t is not None and t < at
+
+
+def stale_report(util, window=600, slack=120):
+    """True when these are the numbers the account we just switched away from had.
+
+    Boundaries decide when both sides carry them, because they survive the drift; a
+    payload rendered while a window has just rolled over carries none, and there the
+    percentages are all there is to match on.
+    """
+    s = load(SWITCH)
+    if not s or time.time() - (s.get("at") or 0) >= window:
+        return False
+    old = s.get("bounds") or {}
+    shared = [k for k in old if _ts(old.get(k)) is not None and _ts((util.get(k) or {}).get("resets_at")) is not None]
+    if shared:
+        return all(abs(_ts(old[k]) - _ts(util[k]["resets_at"])) <= slack for k in shared)
+    pct = [(util.get(k) or {}).get("utilization") for k in ("five_hour", "seven_day")]
+    return any(p is not None for p in pct) and pct == [s.get("five"), s.get("seven")]
 
 
 IDS = os.path.join(ROOT, ".ids.json")

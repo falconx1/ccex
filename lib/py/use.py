@@ -94,9 +94,7 @@ save(pk_cred, pk)
 save(pk_cfg, pkcfg)
 
 # What the outgoing account was reading, before its numbers are parked with it.
-leaving = (cached(BASE)["utilization"] or {})
-note_switch(live_email, *[(leaving.get(k) or {}).get("utilization")
-                          for k in ("five_hour", "seven_day")])
+note_switch(live_email, cached(BASE)["utilization"] or {})
 
 lc["claudeAiOauth"] = sc["claudeAiOauth"]
 for k in ("oauthAccount", "userID", "cachedUsageUtilization"):

@@ -262,11 +262,15 @@ class View:
             return                     # something else is rotating and checking; only report
         if self.act and self.verdict == "SWITCH":
             self.background("rotating", self.tick_cmd())
-        elif self.refresh and self.live and not self.live["live"]:
+        elif self.refresh and self.live:
             old = self.live["age_s"]
             if old is None or old > self.refresh:
-                # Nothing is reporting and the numbers have aged out: the one case where
-                # this view is allowed to start a session, and never on the render thread.
+                # The numbers have aged out: the one case where this view is allowed to
+                # start a session, and never on the render thread.
+                # cm:edge protocol -> lib/py/ccexlib.py — age decides this alone, because an
+                # open session is no longer proof of a reporting one: `record` refuses a
+                # report carrying another account's windows, and a session that never
+                # catches up would otherwise hold these numbers frozen for good.
                 self.background("checking", [sys.executable, LIMITS, "--quiet",
                                              "--no-launch", "--max-age", str(self.refresh)])
 

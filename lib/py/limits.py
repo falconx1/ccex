@@ -160,9 +160,7 @@ for name, d in targets:
     age_s = time.time() - have["fetchedAtMs"] / 1000 if have["fetchedAtMs"] else None
     fresh = age_s is not None and age_s < 300
     too_old = bool(max_age) and (age_s is None or age_s > max_age)   # 0 means never
-    if have["source"] == "session" and live_sessions(d) and not force:
-        st = "ok"                      # a session is open on this account and reporting; touch nothing
-    elif fresh and not force:
+    if fresh and not force:
         st = "ok"                      # someone checked moments ago; no reason to ask again
     elif have["fetchedAtMs"] and not still_counting(d) and not force:
         st = "ok"                      # every window it knew about has since reset, so 0% is certain
@@ -170,10 +168,13 @@ for name, d in targets:
         st = probe(d)                  # nothing reports for a parked account; go and look
     elif not is_base(d):
         st = "parked"                  # not the account you are running; leave it alone until it is
-    elif live_sessions(d) and not force:
-        st = "unhooked"                # never start a second session behind a running one
+    # cm:edge protocol -> lib/py/ccexlib.py — ahead of the open-session branch on purpose.
+    # `record` refuses a report carrying another account's windows, so an open session is no
+    # longer proof of a reporting one: numbers that have aged out get measured either way.
     elif too_old:
         st = probe(d)                  # nothing is reporting and the numbers have aged out
+    elif live_sessions(d) and not force:
+        st = "unhooked"                # never start a second session behind a running one
     elif nolaunch and not force:
         st = "ok"                      # caller would rather have old numbers than a new session
     else:
