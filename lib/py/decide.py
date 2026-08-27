@@ -26,6 +26,11 @@ def cap(a, key, at):
     return default_for(key, at) if v is None else v
 
 
+def reads(a):
+    """The one phrasing of a pair of numbers. Every line that quotes a reading uses this."""
+    return "%d%% 5h / %d%% weekly" % (a["five"] or 0, a["seven"] or 0)
+
+
 def own(a, key, at):
     return "its own %d%%" % a["cap_" + key] if a.get("cap_" + key) is not None \
         else "%d%%" % default_for(key, at)
@@ -108,16 +113,15 @@ def decide(accounts, at=FIVE_AT, blind=False):
         under = "under %s" % own(live, "five", at)
         if own(live, "five", at) != own(live, "seven", at):
             under = "under %s 5h / %s weekly" % (own(live, "five", at), own(live, "seven", at))
-        return "STAY", None, "%s is at %d%% 5h / %d%% weekly, %s" % (
-            live["email"], live["five"], live["seven"], under)
+        return "STAY", None, "%s is at %s, %s" % (live["email"], reads(live), under)
 
     others = [a for a in accounts if a["name"] != "default"]
     nodata = [a["name"] for a in others if not a["logged_in"] or a["five"] is None or a["seven"] is None]
     held = [a["name"] for a in others if a.get("held")]
     room = ranked(accounts, at, blind)
 
-    why = "%s is at %d%% 5h / %d%% weekly (%s over %s)" % (
-        live["email"], live["five"], live["seven"],
+    why = "%s is at %s (%s over %s)" % (
+        live["email"], reads(live),
         " and ".join(w for w, _ in tripped), " and ".join(sorted({o for _, o in tripped})))
     if live.get("held_auto"):
         why += ", and out of the pool (%s)" % live["held_auto"]
@@ -164,5 +168,5 @@ def decide(accounts, at=FIVE_AT, blind=False):
     soon = ""
     if best["five_resets"] and best["five_resets"] - time.time() < FIVE_HOUR / 5:
         soon = ", 5h resets in %dh%02dm" % divmod(int(best["five_resets"] - time.time()) // 60, 60)
-    return "SWITCH", best["name"], "%s, so -> %s at %d%% 5h / %d%% weekly%s%s" % (
-        why, best["email"], best["five"], best["seven"], soon, note)
+    return "SWITCH", best["name"], "%s, so -> %s at %s%s%s" % (
+        why, best["email"], reads(best), soon, note)

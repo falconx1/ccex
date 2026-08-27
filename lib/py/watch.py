@@ -10,7 +10,7 @@ import os, re, select, shutil, subprocess, sys, tempfile, termios, threading, ti
 
 import burn
 from ccexlib import ROOT, USAGE_DIR, fresh, hm, id_for, save, slots
-from decide import FIVE_AT, cap, decide, ranked
+from decide import FIVE_AT, cap, decide, ranked, reads
 from usage import GRACE, account_json, age_text, bar, live_map
 
 PRESETS = [10, 30, 60, 300, 900, 1800]
@@ -533,7 +533,7 @@ class View:
                 # to draw, and the switch reads it before landing on it.
                 to.add(", which nothing has measured yet", GREY)
             else:
-                to.add(" at %d%% 5h / %d%% weekly" % (dest["five"], dest["seven"]))
+                to.add(" at %s" % reads(dest))
                 if dest["age_s"] and dest["age_s"] > 900:
                     to.add(" (numbers %dm old)" % (dest["age_s"] // 60), GREY)
         elif self.verdict != "SWITCH":

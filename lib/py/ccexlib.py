@@ -488,6 +488,3 @@ def step(msg, log=True):
     except OSError:
         pass
 
-
-def reads(a):
-    return "%d%% 5h / %d%% weekly" % (a["five"] or 0, a["seven"] or 0)

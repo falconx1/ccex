@@ -1,8 +1,8 @@
 """Print rotation's decision as one tab-separated line for `lib/rotate.sh`. Reads `ccex ls --json`."""
 import json, os, sys, time
 
-from ccexlib import USAGE_DIR, hm, hold_auto, load, reads, save, slots, step
-from decide import FIVE_AT, FIVE_HOUR, WEEKLY_AT, cap, decide, ranked
+from ccexlib import USAGE_DIR, hm, hold_auto, load, save, slots, step
+from decide import FIVE_AT, FIVE_HOUR, WEEKLY_AT, cap, decide, ranked, reads
 
 accounts = json.load(sys.stdin)
 argv = sys.argv[1:]
@@ -17,6 +17,7 @@ CURRENT = 300       # numbers this recent are worth nothing extra to re-ask for
 NEAR = 5            # percentage points below the cap that count as about to switch
 AHEAD = os.path.join(USAGE_DIR, ".readahead.json")   # what was already read for this window
 skip = set()        # candidates this run has ruled out, so re-deciding does not offer them again
+retired = []        # accounts plan() took out of the pool, in the order it did it
 
 
 def opened(live):
@@ -45,7 +46,6 @@ def plan():
     Only verification can offer an unmeasured account, so `blind` follows it exactly: with
     nothing going to read that account first, being unmeasured has to keep it out.
     """
-    retired = []
     for a in accounts:
         if a.get("held") or a["seven"] is None or a["seven"] < WEEKLY_AT:
             continue                      # a low weekly cap keeps an account in reserve; only a
@@ -54,12 +54,12 @@ def plan():
             retired.append("%s (%s)" % (a["name"], why))
             a["held"], a["held_auto"] = True, why
     return decide([a for a in accounts if a["name"] not in skip],
-                  at, blind=verify and not dry) + (retired,)
+                  at, blind=verify and not dry)
 
 
 # An account that has spent its week comes off the list, and only `ccex pool in` puts it
 # back. This is the one place it happens: the view predicts, the daemon delegates here.
-verdict, target, message, retired = plan()
+verdict, target, message = plan()
 
 # Before the slot changes hands, ask the account we are moving to what it actually has left.
 # Nothing but a running session reports for an account, and a parked one has none -- so its
@@ -70,7 +70,6 @@ verdict, target, message, retired = plan()
 # session -- but only for the one account about to be used, and only at the moment it is.
 if verify and not dry:
     from ask import ask                   # importing it is what makes a session possible
-    from usage import account_json
 
     dirs, checked, notes, unasked = dict(slots()), [], [], []
     if verdict == "SWITCH":
@@ -96,7 +95,7 @@ if verify and not dry:
                 target, reads(row), hm(row["age_s"]) if row.get("age_s") else "moments"))
             break
         was = None if blind else reads(row)      # "0%" would claim a reading there never was
-        st, got = ask(target, dirs[target], was, lambda: account_json(target, dirs[target]),
+        st, got = ask(target, dirs[target], was,
                       ", leaving it out" if blind else ", trying the next")
         if st == "ok":
             row = got
@@ -118,8 +117,7 @@ if verify and not dry:
             skip.add(target)
             unasked.append(target)
             notes.append("%s could not be asked (%s), so trying the next account" % (target, st))
-        verdict, target, message, more = plan()
-        retired += more
+        verdict, target, message = plan()
 
     if verdict == "SWITCH" and target not in checked and len(checked) >= TRIES:
         # The loop stops asking somewhere: three sessions is already most of a minute inside
@@ -131,8 +129,7 @@ if verify and not dry:
         # on file is a poor answer but staying on an account with none is a worse one, so the
         # best of them is used after all -- and the line says that is what happened.
         skip.difference_update(unasked)
-        verdict, target, message, more = plan()
-        retired += more
+        verdict, target, message = plan()
         if verdict == "SWITCH":
             notes.append("none of them could be asked, so this is the numbers on file")
 
@@ -172,16 +169,14 @@ if verify and not dry and verdict == "STAY":
             (tried.get("name") == cand["name"] and (tried.get("at") or 0) >= since)
         if not done:
             from ask import ask
-            from usage import account_json
             os.makedirs(USAGE_DIR, exist_ok=True)
             save(AHEAD, {"name": cand["name"], "at": time.time()})   # before, so a crash counts
             step(None)                # this read is its own trail
             step("nearly at the cap, reading %s ahead of the switch" % cand["name"])
             n = cand["name"]
-            st, row = ask(n, dirs[n], after=lambda: account_json(n, dirs[n]))
+            st, row = ask(n, dirs[n])
             if st == "ok":
-                message += "; %s reads %d%% 5h / %d%% weekly, read ahead of the switch" % (
-                    n, row["five"] or 0, row["seven"] or 0)
+                message += "; %s reads %s, read ahead of the switch" % (n, reads(row))
             else:
                 message += "; %s could not be read ahead of the switch (%s)" % (n, st)
 
