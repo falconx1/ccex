@@ -35,8 +35,8 @@ monitor() {
       printf '%s\n%s\n' "$ts" "$out" > "$ROOT/.usage/.monitor-last"
       if [ "$before" != "$after" ] || [ "$rc" != 0 ]; then
         printf '%s  %s\n' "$ts" "$(printf '%s' "$out" | tr '\n' '~' | sed 's/~/ | /g')" >> "$log"
-        if [ "$(wc -l < "$log")" -gt 200 ]; then    # months of switches, not years
-          tail -n 200 "$log" > "$log.new" && mv "$log.new" "$log"
+        if [ "$(wc -l < "$log")" -gt 1000 ]; then   # a switch is a line, and so is every ask
+          tail -n 1000 "$log" > "$log.new" && mv "$log.new" "$log"
         fi
       fi
       printf '%s\n' "$out"

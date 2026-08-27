@@ -291,8 +291,29 @@ them. With both in place a check takes about six seconds.
 
 `CCEX_PROBE_TIMEOUT` raises the ceiling on a machine where claude starts slowly. Rotation may
 ask up to three accounts and holds the switch lock while it does, so raising it raises
-`CCEX_LOCK_WAIT` (180s) with it. While a check is running the live view says `asking <name>…`,
-because a switch that spends three sessions otherwise looks like a view that has stopped.
+`CCEX_LOCK_WAIT` (180s) with it.
+
+Because that is most of a minute during which the only honest verdict is "now", the live view
+prints what is happening as it happens — one line per thing done, newest marked:
+
+```
+ rotation     rotating on data change, every 10s, next read in 6s at 90%
+                 asking dev-team001 (on file: 0% 5h / 24% weekly)
+                 dev-team001 did not answer (timeout), trying the next
+                 asking thanhnh (on file: 0% 5h / 25% weekly)
+                 thanhnh answered 0% 5h / 25% weekly
+              -> switching to thanhnh
+```
+
+The trail belongs to one tick and is cleared when the credential moves, so an empty rotation
+line means nothing is being asked. A trail left behind by a tick that died is ignored after
+five minutes rather than shown for good.
+
+`next read in 6s` counts down to the daemon's next look at the numbers — it can come sooner,
+because a statusline write is a file whose mtime the daemon is already watching, but never
+later. The same lines go to `ccex rotate --log`, which used to record only ticks that changed
+the live account: a tick that spent three sessions asking and then stayed put left no trace
+of having asked at all.
 
 Because the check exists, an account **nothing has ever measured** can be a candidate too —
 ranked behind every account that has been, so it is only reached for once the measured ones

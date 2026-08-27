@@ -361,6 +361,9 @@ age_numbers
 out=$("$CCEX" rotate --at 80 2>&1)
 t  "with nothing answering it says so"        "none of them could be asked" echo "$out"
 t  "and falls back to the numbers on file"    "b@example.com"        live_email
+rlog() { cat "$CC_PROFILE_ROOT/.usage/rotate.log" 2>&1; }
+t  "the log records the probe starting"       "asking bee"           rlog
+t  "and how it went"                          "did not answer"       rlog
 
 teardown; setup
 age_numbers
@@ -419,6 +422,14 @@ age_numbers
 out=$("$CCEX" rotate --at 80 2>&1)
 t  "a measured account wins over an unmeasured one" "c@example.com"  live_email
 absent "and the unmeasured one is not asked"        "b@example.com"  echo "$out"
+
+teardown; setup                 # a tick that asks and stays put still leaves a trace
+unmeasure bee b_example_com.json
+spend_five cee 95
+age_numbers
+"$CCEX" rotate --at 93 >/dev/null 2>&1
+t  "a read-ahead is logged even with no switch" "reading bee ahead" \
+   cat "$CC_PROFILE_ROOT/.usage/rotate.log"
 
 teardown; setup                 # a is live at 90%; at --at 93 it is inside the 5-point band
 unmeasure bee b_example_com.json
@@ -684,6 +695,7 @@ t  "under threshold it stays quiet" "1"                    bash -c 'wc -l < "$1/
 t  "and rotates nothing"          "a@example.com"          bash -c '"$1" ls | awk "/\*/ {print \$4}"' _ "$CCEX"
 t  "refresh off never probes"     "0"                      bash -c 'grep -c max-age "$1/quiet.out" || true' _ "$HOME"
 t  "it notes when it last looked" "under"                  cat "$CC_PROFILE_ROOT/.usage/.monitor-last"
+t  "and beats once per read"     "under"                  cat "$CC_PROFILE_ROOT/.usage/.beat"
 reloads() {   # a service left running for weeks must not keep running the code it started with
   "$CCEX" rotate --serve --at 99 --every 1s >"$HOME/reload.out" 2>&1 &
   local pid=$!
@@ -826,10 +838,26 @@ absent "and left puts it back"      "a@example.com"            cat "$CC_PROFILE_
 
 teardown; setup
 mkdir -p "$CC_PROFILE_ROOT/.usage"
-printf 'bee' > "$CC_PROFILE_ROOT/.usage/.asking"
-t  "the view says who is being asked" "asking bee"     frame 99
-rm -f "$CC_PROFILE_ROOT/.usage/.asking"
-absent "and stops once nothing is"    "asking bee"     frame 99
+cat > "$CC_PROFILE_ROOT/.usage/daemon.json" <<'DJ'
+{"at": 99, "every": "10s", "refresh": 0, "since": "2026-08-27 16:00:00"}
+DJ
+: > "$CC_PROFILE_ROOT/.usage/.beat"
+t  "the next read is counted down"  "next read in"   frame 99
+touch -d '30 seconds ago' "$CC_PROFILE_ROOT/.usage/.beat"
+t  "an overdue read says so"        "due now"        frame 99
+rm -f "$CC_PROFILE_ROOT/.usage/daemon.json" "$CC_PROFILE_ROOT/.usage/.beat"
+
+printf 'asking bee (on file: 10%% 5h / 20%% weekly)\nbee did not answer (timeout), trying the next\nswitching to cee\n' \
+  > "$CC_PROFILE_ROOT/.usage/.step"
+t  "the view says what rotation is doing" "asking bee"          frame 99
+t  "and what it had on file"               "10% 5h"             frame 99
+t  "every action on its own line"          "trying the next"    frame 99
+t  "with the newest one marked"            "-> switching to cee" frame 99
+matches "one line each, in order" 'asking bee.*\n.*did not answer.*\n.*switching to cee' frame 99
+touch -d '10 minutes ago' "$CC_PROFILE_ROOT/.usage/.step"
+absent "a trail nobody cleared goes stale" "asking bee"  frame 99
+rm -f "$CC_PROFILE_ROOT/.usage/.step"
+absent "and stops once nothing is"         "asking bee"  frame 99
 t  "a bad watch flag is refused"  "not a --watch option" "$CCEX" ls -w --bogus
 t  "and a bad duration too"       "cannot read"          "$CCEX" ls -w --every m
 t  "plain ls is untouched by it"  "CHECKED"              "$CCEX" ls

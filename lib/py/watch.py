@@ -6,7 +6,7 @@ slower --every tick, and only that tick walks /proc or asks systemd anything. No
 here starts a session unless --refresh says it may, and then off the render loop, so the
 view never freezes waiting for one.
 """
-import os, select, shutil, subprocess, sys, termios, threading, time, tty
+import os, re, select, shutil, subprocess, sys, termios, threading, time, tty
 
 import burn
 from ccexlib import ROOT, USAGE_DIR, fresh, hm, id_for, save, slots
@@ -17,6 +17,15 @@ PRESETS = [10, 30, 60, 300, 900, 1800]
 PROC_EVERY = 15         # seconds between /proc walks: the one read that is not free
 WEEKLY_NEAR = 90        # below this the week is not what the next switch will be about
 NO_UNIT = {"active": False, "legacy": False, "at": None, "refresh": None, "every": None}
+
+
+BEAT = ".beat"       # touched every time the daemon reads the numbers
+
+
+def paced(txt):
+    """"10s", "5m" -> seconds. What the daemon's own --every says, whichever way it says it."""
+    m = re.match(r"\s*(\d+)\s*([smh]?)", txt or "")
+    return int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)] if m else 0
 DAEMON = os.path.join(ROOT, ".usage", "daemon.json")     # written by the daemon itself
 LIMITS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "limits.py")
 CCEX = os.environ.get("CCEX_BIN") or "ccex"
@@ -506,16 +515,28 @@ class View:
 
         t = self.timer
         rot = Line().add(" rotation     ", BOLD)
-        try:                          # rotate.py writes this while it has a session open
-            with open(os.path.join(USAGE_DIR, ".asking")) as f:
-                who = f.read().strip()
+        # What rotation is doing right now, one line per thing done. A switch that asks three
+        # accounts takes most of a minute, and "now" on its own reads like a frozen view.
+        # Anything older than a few minutes is a tick that died without clearing up.
+        trail, p = [], os.path.join(USAGE_DIR, ".step")
+        try:
+            if now - os.path.getmtime(p) < 300:
+                with open(p) as f:
+                    trail = [l.strip() for l in f.read().splitlines() if l.strip()]
         except OSError:
-            who = ""
-        if who:
-            rot.add("asking %s..." % who, YELLOW).add("  ")
+            pass
         if t["active"]:
             rot.add("rotating on data change", GREEN)
-            rot.add(", every %s at %s%%" % (t["every"] or "?", t["at"] or "?"))
+            # When the next read is due. The daemon also wakes on a data change, so it can
+            # come sooner than this -- never later, which is what makes it worth counting.
+            due, ev = "", paced(t["every"])
+            try:
+                left = ev - (now - os.path.getmtime(os.path.join(USAGE_DIR, BEAT)))
+                if ev:
+                    due = ", next read due now" if left < 1 else ", next read in %ds" % round(left)
+            except OSError:
+                pass
+            rot.add(", every %s%s at %s%%" % (t["every"] or "?", due, t["at"] or "?"))
             if t["refresh"]:
                 rot.add(", one real check after %ss of silence" % t["refresh"])
         elif t.get("legacy"):
@@ -528,6 +549,11 @@ class View:
         if self.note:
             rot.add("  %s" % self.note, DIM)
         L.append(rot)
+        for i, one in enumerate(trail):
+            last = i == len(trail) - 1
+            L.append(Line().add("              ", "")
+                     .add(("-> " if last else "   "), GREY)
+                     .add(one, YELLOW if last else GREY))
 
         if self.switches:
             L.append(Line().add(" rotated      ", BOLD)
@@ -589,6 +615,11 @@ def serve(v):
            if v.refresh else ""), flush=True)
     while True:
         v.sample()
+        try:                # one stat's worth of "I just looked", for the countdown to use
+            with open(os.path.join(USAGE_DIR, BEAT), "w") as f:
+                f.write(v.message + "\n")
+        except OSError:
+            pass
         due = v.refresh and time.time() - beat >= v.refresh
         if v.verdict == "SWITCH" or due:
             beat = time.time()

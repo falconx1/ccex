@@ -15,15 +15,20 @@ def trusted_dir(cfg):
             return path
     return None
 
-TIMEOUT = int(os.environ.get("CCEX_PROBE_TIMEOUT") or 50)   # a slow start may want more
+# A probe on its own takes about 6s. The second of three in a row was measured at 47s on an
+# account that had just answered in 6 -- and claude reads the system keychain at startup, so
+# the likeliest reason is a keyring dialog nobody had answered yet. Waiting longer for a
+# dialog is not waiting for an answer, so the ceiling stays where it is; CCEX_PROBE_TIMEOUT
+# raises it on a machine where launches really are just slow.
+TIMEOUT = int(os.environ.get("CCEX_PROBE_TIMEOUT") or 50)
 
 
 def probe(d, timeout=None):
     """Launch the real `claude` TUI on this account, open /usage, quit. No inference, no cost.
 
-    CCEX_PROBE_TIMEOUT raises the ceiling for a machine where claude starts slowly. Rotation
-    may ask up to three accounts before it switches, and it holds the switch lock while it
-    does, so raising this raises CCEX_LOCK_WAIT's floor with it.
+    CCEX_PROBE_TIMEOUT moves the ceiling. Rotation may ask up to three accounts before it
+    switches and holds the switch lock while it does, so raising this raises CCEX_LOCK_WAIT's
+    floor with it.
     """
     timeout = TIMEOUT if timeout is None else timeout
     cfg = cfg_for(d)

@@ -21,6 +21,7 @@ rotate_now() {
             case " $* " in *" -n "*|*" --dry-run "*) printf 'ccex: dry run, nothing written\n'; return 0 ;; esac
             local rc=0
             do_use "$pick" ${pass[@]+"${pass[@]}"} || rc=$?
+            rm -f "$ROOT/.usage/.step"     # `py rotate` left it saying "switching to ..."
             case "$rc" in
               0) ;;
               3) printf 'ccex: %s was already live; nothing moved\n' "$pick" ;;
