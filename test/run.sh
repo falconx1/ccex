@@ -855,6 +855,8 @@ t  "one frame lists the accounts" "b@example.com"        frame 80
 t  "and draws the meters"         "█"                    frame 80
 matches "the countdown ticks in seconds" '[0-9]+m [0-9][0-9]s'  frame 80
 matches "and the cap is drawn into the bar" '▕?[█░]*╵'    frame 80
+t  "it counts the login down"     "REFRESH"              frame 80
+matches "in days while it has them" '[0-9]+d [0-9][0-9]h'  frame 80
 t  "it folds in the monitor"      "next switch"          frame 80
 t  "over threshold: switch now"   "now"                  frame 80
 t  "and names where it would go"  "b@example.com"        frame 80

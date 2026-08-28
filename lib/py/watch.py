@@ -113,6 +113,8 @@ class Line:
         return "".join(out)
 
 
+TAIL = 9            # CHECKED and REFRESH: both a short word or a two-part clock
+
 GAP = "    "        # between the two windows: each is a percentage, a bar and a clock, and
                     # they read as one thing only if there is space around them
 
@@ -121,14 +123,34 @@ def layout(width):
     """Column sizes for this terminal: the meters get the room, the rest gives way.
 
     Widest first -- a longer bar is worth more than a second on the clock, which is worth
-    more than the age of a reading the panel also gives you.
+    more than seeing an address in full, which is worth more than the two tail columns. The
+    address gives way before they do because it is the one thing already truncated with a
+    mark that says so; a countdown cut in half just reads wrong.
     """
-    bar = 16 if width >= 124 else 12 if width >= 100 else 10
+    bar = 16 if width >= 132 else 12 if width >= 100 else 10
     secs = width >= 104                      # a countdown to the second, not just the minute
-    mail = 30 if width >= 130 else 26 if width >= 114 else 20
     cell = 5 + bar + 1 + (11 if secs else 10)
-    fixed = 2 + 4 + mail + cell + len(GAP) + cell + 12
-    return bar, secs, mail, cell, width >= fixed + 9
+    fixed = 2 + 4 + cell + len(GAP) + cell + 12          # everything but the address and the tails
+    mail = next((m for m in (30, 26, 22) if width >= fixed + m + TAIL + TAIL), 20)
+    return bar, secs, mail, cell, width >= fixed + mail + TAIL, \
+        width >= fixed + mail + TAIL + TAIL
+
+
+def token_left(t, now):
+    """How long this login has left, and how loudly to say so.
+
+    Days while it has them, because a month of them moving one at a time is not news. Under
+    a day it is: the account is hours from wanting a browser, and rotation will walk into it.
+    """
+    if not t:
+        return "-", GREY
+    left = t - now
+    if left <= 0:
+        return "expired", RED
+    if left >= 86400:
+        return "%dd %02dh" % (left // 86400, left % 86400 // 3600), \
+               YELLOW if left < 3 * 86400 else GREY
+    return "%dh %02dm" % (left // 3600, left % 3600 // 60), RED
 
 
 def fit_email(email, width):
@@ -422,7 +444,7 @@ class View:
 
     def frame(self, width, height, colour=True):
         L, now = [], time.time()
-        bar, secs, mail, cell, agecol = layout(width)
+        bar, secs, mail, cell, agecol, refcol = layout(width)
         live = self.live
 
         head = Line().add(" ccex ", BOLD + REV).add(" ")
@@ -439,7 +461,9 @@ class View:
         hdr.add("5H", REV, cell + len(GAP)).add("WEEKLY", REV, cell)
         hdr.add(" ROTATION", REV, 12)
         if agecol:
-            hdr.add("CHECKED", REV, 9)
+            hdr.add("CHECKED", REV, TAIL)
+        if refcol:
+            hdr.add("REFRESH", REV, TAIL)
         L.append(hdr)
 
         # What rotation is doing right now, one line per thing done, printed below everything
@@ -512,8 +536,12 @@ class View:
                 tint = CYAN
             row.add(" " + state, tint, 12)
             if agecol:
-                row.add("live" if a["live"] else age_text(a["age_s"]),
-                        GREEN if a["live"] else GREY, 9)
+                # cut a word short of the column: with another column behind it, a cell that
+                # fills its own width runs into the next one
+                row.add(("live" if a["live"] else age_text(a["age_s"]))[:TAIL - 1],
+                        GREEN if a["live"] else GREY, TAIL)
+            if refcol:
+                row.add(*token_left(a["refresh_at"], now), pad=TAIL)
             L.append(row)
 
         L.append(Line())               # a blank line, not a rule: the panel below is words

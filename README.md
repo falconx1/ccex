@@ -129,10 +129,10 @@ $ ccex ls -w
 
 ```
  ccex  3 accounts  live: ada@example.com  switch at 90% (daemon)  every 10s   00:35:36
-    # ACCOUNT                   5H                               WEEKLY                        ROTATION   CHECKED
-›▶  1 ada@example.com            62% ███████░░░╵░ 2h 49m 22s      23% ███░░░░░░░░╵ 14h 09m 22s in pool    1m ago
-    2 ada@acme.example            9% █░░░░░░░░░╵░ 2h 19m 22s      36% ████░░░░░░░╵ 4d 08h 09m  in pool    1m ago
-    3 ada.lovelace@gmail.com      4% ░░░░░╵░░░░░░ 1h 09m 22s      18% ██░╵░░░░░░░░ 18h 09m 22s cap 50/30  1m ago
+    # ACCOUNT                   5H                               WEEKLY                        ROTATION   CHECKED  REFRESH
+›▶  1 ada@example.com            62% ███████░░░╵░ 2h 49m 22s      23% ███░░░░░░░░╵ 14h 09m 22s in pool    1m ago   29d 07h
+    2 ada@acme.example            9% █░░░░░░░░░╵░ 2h 19m 22s      36% ████░░░░░░░╵ 4d 08h 09m  in pool    1m ago   11d 22h
+    3 ada.lovelace@gmail.com      4% ░░░░░╵░░░░░░ 1h 09m 22s      18% ██░╵░░░░░░░░ 18h 09m 22s cap 50/30  1m ago   19h 40m
 
  next switch  in 2h 27m 22s (03:02)  5h is at 62%, climbing 11.4% an hour to its 90% cap
               -> 3 ada.lovelace@gmail.com at 4% 5h / 18% weekly
@@ -143,6 +143,12 @@ $ ccex ls -w
 `ccex ls` tells you where you stand; `ccex ls -w` leaves it on screen and folds the
 rotation monitor into the bottom of it, so the question you actually have — *when does
 this switch, and to what* — is answered in one place.
+
+`REFRESH` is the last column: how long that account's login has left. It is the refresh
+token's own clock — the access token renews itself and its hours are nobody's business, but
+when the refresh token goes, that account wants a browser. It counts in days while it has
+them and turns red inside the last one, so a parked account does not expire quietly and
+surprise rotation. Both tail columns give way on a narrow terminal, `REFRESH` first.
 
 The countdowns tick every second, the `╵` in each bar is the percentage that account
 counts as out of room at, and `next switch` is the estimate: how fast the live account's
