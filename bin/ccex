@@ -62,7 +62,9 @@ it needs a few minutes of readings before it can say.
 Each row is one account by email, then each window as a percentage, a bar with a tick
 where that account counts as out of room, and how long until it resets. `▶` marks the
 account you are billing, `›` the one the arrows are on, and ROTATION says whether
-rotation may choose it -- in pool, held, retired, or its own cap.
+rotation may choose it -- in pool, held, retired, or its own cap. CHECKED is how old
+its numbers are and REFRESH how long its login lasts -- the refresh token's own clock,
+which is what ends in a browser. Both give way on a narrow terminal.
 
 The estimate is about the 5-hour window, which is what actually stops you working; the
 week only joins it once it is past 90%. Both read the same per-account caps rotation

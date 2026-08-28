@@ -132,6 +132,18 @@ def logged_in(d):
     return "claudeAiOauth" in fresh(creds_for(d))
 
 
+def refresh_at(d):
+    """When this login runs out, in seconds since the epoch, or None if there is no login.
+
+    The access token renews itself and how long it has is nobody's business. The refresh
+    token is the clock that actually ends in a login prompt, and the only one worth counting
+    down: an account whose refresh token expires while it is parked is one you will find out
+    about when rotation reaches for it.
+    """
+    v = (fresh(creds_for(d)).get("claudeAiOauth") or {}).get("refreshTokenExpiresAt")
+    return v / 1000 if v else None
+
+
 def slots():
     """(name, dir) for the live account and every parked one, live first.
 

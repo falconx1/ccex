@@ -7,7 +7,7 @@ live. Both read them through here, so they never disagree.
 import datetime, os, time
 
 from ccexlib import (BASE, CFG_KEYS, caps, cfg_for, email_for, foreign_report, fresh, held,
-                     held_auto, hm, id_for, logged_in, snap_path)
+                     held_auto, hm, id_for, logged_in, refresh_at, snap_path)
 
 GRACE = 60          # a window inside its last minute has effectively already rolled over
 _walk = (0.0, {})   # the last /proc walk, and when
@@ -147,7 +147,8 @@ def account_json(name, d, now=None, pids=None):
             "age_s": int((now or time.time()) - c["fetchedAtMs"] / 1000) if c["fetchedAtMs"] else None,
             "live": c["source"] == "session" and running,
             "held": held(d), "held_auto": held_auto(d),
-            "cap_five": c5, "cap_seven": c7, "logged_in": logged_in(d)}
+            "cap_five": c5, "cap_seven": c7, "logged_in": logged_in(d),
+            "refresh_at": refresh_at(d)}
 
 
 def fill(pct, width):
