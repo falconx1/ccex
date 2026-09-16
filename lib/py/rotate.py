@@ -2,7 +2,7 @@
 import json, os, sys, time
 
 from ccexlib import USAGE_DIR, barred, hm, hold_auto, load, save, slots, step
-from decide import FIVE_AT, FIVE_HOUR, WEEKLY_AT, cap, decide, ranked, reads
+from decide import FIVE_AT, FIVE_HOUR, WEEKLY_AT, cap, capped, decide, ranked, reads
 
 accounts = json.load(sys.stdin)
 argv = sys.argv[1:]
@@ -50,14 +50,19 @@ def plan():
     for a in accounts:
         if a.get("held"):
             continue
-        # Two ways out of the pool, and a cap changes neither. A cap says how far to spend an
-        # account; it says nothing about one that is not allowed to run at all, and nothing
-        # about one whose week is gone. Being refused is the more urgent of the two: those
-        # numbers only look better with age, so left in the pool that account ends up first
-        # in line for a switch that lands somewhere nothing works.
+        # Two ways out of the pool. Being refused is the more urgent: those numbers only look
+        # better with age, so left in the pool that account ends up first in line for a switch
+        # that lands somewhere nothing works. A cap changes nothing there -- it says how far to
+        # spend an account, not whether it may run at all.
+        #
+        # A spent week is the other, and there a cap does excuse it. An account under a cap
+        # is someone else's or held in reserve, and it only reaches 99% because that cap gave
+        # way in the last hours of its week. The cap already keeps rotation off it above the
+        # line and takes it back the moment the new week starts -- a hold on top of that adds
+        # nothing but a `ccex pool in` at the start of every week.
         why = barred(a["email"]) or (
             "weekly at %d%%" % a["seven"]
-            if a["seven"] is not None and a["seven"] >= WEEKLY_AT else None)
+            if a["seven"] is not None and a["seven"] >= WEEKLY_AT and not capped(a) else None)
         if why and (dry or hold_auto(a["email"], why)):
             pulled.append("%s (%s)" % (a["name"], why))
             a["held"], a["held_auto"] = True, why
