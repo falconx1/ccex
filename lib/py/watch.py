@@ -14,6 +14,13 @@ from decide import FIVE_AT, cap, decide, listing, ranked, reads
 from usage import GRACE, account_json, age_text, bar, live_map
 
 PRESETS = [10, 30, 60, 300, 900, 1800]
+# Taking the terminal and giving it back: the alternate screen, the cursor, and mouse
+# reporting -- SGR encoded, so a click arrives as `\x1b[<b;x;yM` with no byte ambiguity.
+TAKE, GIVE = "\033[?1049h\033[?25l\033[?1000h\033[?1006h", "\033[?1000l\033[?1006l\033[?25h\033[?1049l"
+# The columns the table can be ordered by, in the order `s` walks them. Rotation's own order
+# is the first and the default: the table reads as the queue a switch would work through.
+SORTS = ("rotation", "#", "pool", "cap", "account", "5h", "5h-reset", "weekly", "weekly-reset",
+         "checked", "refresh")
 PROC_EVERY = 15         # seconds between /proc walks: the one read that is not free
 # The daemon needs the walk too, and for a different reason than the view: the estimate for a
 # session gone quiet is only reached for an account something is running, so with no walk it
@@ -45,7 +52,7 @@ def handover(old, cmd):
     screen or in cbreak mode -- and it cannot run in a thread either, because it wants
     this terminal. So the view steps out of the way and redraws when it is done.
     """
-    sys.stdout.write("\033[?25h\033[?1049l")
+    sys.stdout.write(GIVE)
     sys.stdout.flush()
     if old:
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old)
@@ -54,7 +61,7 @@ def handover(old, cmd):
     except (OSError, KeyboardInterrupt):
         return 1
     finally:
-        sys.stdout.write("\033[?1049h\033[?25l")
+        sys.stdout.write(TAKE)
         sys.stdout.flush()
         if old:
             tty.setcbreak(sys.stdin.fileno())
@@ -204,6 +211,8 @@ class View:
         self.asked, self.walked, self.pids = 0.0, 0.0, {}
         self.serving = False
         self.once = False              # a one-shot table: no cursor to draw, no keys to list
+        self.sort, self.reverse = "rotation", False   # which column orders the rows, which way
+        self.cols, self.shown = [], []  # where each column starts and ends, and the rows drawn
         self.last_live, self.switches = None, []
         self.typed = ""                # account number being typed, waiting for y to confirm
         self.cursor = None             # email of the selected row, kept across re-sorts
@@ -453,6 +462,65 @@ class View:
 
     # ---- rendering ------------------------------------------------------------
 
+    def ordered(self, rows, at):
+        """The rows in the order the table shows them: rotation's, or by one column.
+
+        A row with nothing in that column goes last whichever way the sort runs -- an
+        unmeasured window is not the lowest number, it is no number -- and rows that tie
+        keep rotation's order between them, which is what a stable sort gives for free.
+
+        Each window is two columns to sort by, because they answer different questions: how
+        spent it is, and how soon it comes back. A window whose reset has passed is the
+        soonest of all -- it is already back -- so it counts as no time left, not no time.
+        """
+        if self.sort == "rotation":
+            return rows[::-1] if self.reverse else rows
+        now = time.time()
+
+        def left(t):
+            return None if not t else max(0.0, t - now)
+        keys = {
+            "#": lambda a: a["id"],
+            "pool": lambda a: int(bool(a["held"])),         # in first
+            "cap": lambda a: (cap(a, "five", at), cap(a, "seven", at))
+                   if a["cap_five"] is not None or a["cap_seven"] is not None else None,
+            "account": lambda a: a["email"].lower(),
+            "5h": lambda a: a["five"],
+            "5h-reset": lambda a: left(a["five_resets"]),
+            "weekly": lambda a: a["seven"],
+            "weekly-reset": lambda a: left(a["seven_resets"]),
+            "checked": lambda a: 0 if a["live"] else a["age_s"],
+            "refresh": lambda a: a["refresh_at"],
+        }
+        key = keys[self.sort]
+        have = [a for a in rows if key(a) is not None]
+        return sorted(have, key=key, reverse=self.reverse) + [a for a in rows if key(a) is None]
+
+    def resort(self, step=1):
+        """`s`: the next column along; `S` turns the current one round."""
+        if step:
+            self.sort = SORTS[(SORTS.index(self.sort) + step) % len(SORTS)]
+            self.reverse = False
+        else:
+            self.reverse = not self.reverse
+
+    def sort_by(self, name):
+        """A header clicked: order by that column, or turn it round if it already does."""
+        if self.sort == name:
+            self.reverse = not self.reverse
+        else:
+            self.sort, self.reverse = name, False
+
+    def click(self, x, y):
+        """A left click, in 1-based screen cells. The header sorts; a row is selected."""
+        if y == 2:
+            for name, x0, x1 in self.cols:
+                if x0 < x <= x1:
+                    self.sort_by(name)
+                    return
+        elif y >= 3 and y - 3 < len(self.shown):
+            self.cursor = self.shown[y - 3]["email"]
+
     def frame(self, width, height, colour=True):
         L, now = [], time.time()
         bar, secs, mail, cell, agecol, refcol = layout(width)
@@ -468,13 +536,29 @@ class View:
         head.add(time.strftime(" %H:%M:%S"), DIM)
         L.append(head)
 
-        hdr = Line().add("    # ", REV).add("POOL", REV, POOL).add("CAP", REV, CAP)
-        hdr.add("ACCOUNT", REV, mail)
-        hdr.add("5H", REV, cell + len(GAP)).add("WEEKLY", REV, cell)
+        self.cols, edge = [], [0]
+
+        def col(label, name, pad):
+            # The column the rows are ordered by wears the direction on its header; the
+            # rest are what they were, so a sort changes one cell and moves nothing. Each
+            # header remembers where it sits, which is what a click on it is matched against.
+            if self.sort == name:
+                label += "▴" if self.reverse else "▾"
+            self.cols.append((name, edge[0], edge[0] + pad))
+            edge[0] += pad
+            return label, REV, pad
+
+        hdr = Line().add(*col("    #", "#", 6)).add(*col("POOL", "pool", POOL))
+        hdr.add(*col("CAP", "cap", CAP)).add(*col("ACCOUNT", "account", mail))
+        # Each window's header is two: the percentage and meter, then RESETS over the clock,
+        # so the clock can be sorted -- and clicked -- on its own.
+        used = 5 + bar + 1                        # "%3d%% " and the meter and a space
+        hdr.add(*col("5H", "5h", used)).add(*col("RESETS", "5h-reset", cell - used + len(GAP)))
+        hdr.add(*col("WEEKLY", "weekly", used)).add(*col("RESETS", "weekly-reset", cell - used))
         if agecol:
-            hdr.add("CHECKED", REV, TAIL)
+            hdr.add(*col("CHECKED", "checked", TAIL))
         if refcol:
-            hdr.add("REFRESH", REV, TAIL)
+            hdr.add(*col("REFRESH", "refresh", TAIL))
         L.append(hdr)
 
         # What rotation is doing right now, one line per thing done, printed below everything
@@ -490,13 +574,14 @@ class View:
         except OSError:
             pass
 
-        shown = self.rows
+        shown = self.ordered(self.rows, self.at)
         # The trail is charged to the same height the accounts come out of, so a switch grows
         # the frame by nothing and the view does not scroll out from under itself.
         room = height - 9 - (1 if self.switches else 0) - (len(trail) + 1 if trail else 0)
         if len(shown) > room > 0:
             keep = [a for a in shown if a["name"] == "default"][:1]
             shown = (keep + [a for a in shown if a not in keep])[:room]
+        self.shown = shown             # the rows on screen, top down, for a click to land on
         for a in shown:
             here = a["name"] == "default"
             # The account you are billing is the one fact you look for first, so it gets an
@@ -655,6 +740,7 @@ class View:
             keys.add("↑↓", REV).add(" select  ").add("enter", REV).add(" switch  ")
             keys.add("←→", REV).add(" out/in  ")
             keys.add("a", REV).add(" add  ").add("c", REV).add(" cap  ")
+            keys.add("s/S", REV).add(" sort  ")
             keys.add("+/-", REV).add(" pace  ").add("r", REV).add(" refresh  ")
             keys.add("q", REV).add(" quit   ")
             keys.add("up %s" % hm(now - self.started), GREY)
@@ -726,9 +812,13 @@ def main():
     argv = sys.argv[1:]
     every, at, refresh, act, once = 10, FIVE_AT, 0, False, "--once" in argv
     verify = "--no-verify" not in argv
-    at_given = False
+    at_given, sort = False, "rotation"
     for i, a in enumerate(argv):
-        if a == "--every" and i + 1 < len(argv):
+        if a == "--sort" and i + 1 < len(argv):
+            sort = argv[i + 1].lower()
+            if sort not in SORTS:
+                sys.exit("ccex: --sort wants one of %s, not '%s'" % (", ".join(SORTS), argv[i + 1]))
+        elif a == "--every" and i + 1 < len(argv):
             every = max(1, int(argv[i + 1]))
         elif a == "--at" and i + 1 < len(argv):
             at, at_given = int(argv[i + 1]), True
@@ -741,6 +831,7 @@ def main():
         v.serving = True
         return serve(v)
     v = View(every, at, refresh, act, at_given, verify)
+    v.sort = sort
     v.sample()
 
     tty_in, tty_out = sys.stdin.isatty(), sys.stdout.isatty()
@@ -759,7 +850,7 @@ def main():
 
     old = termios.tcgetattr(sys.stdin) if tty_in else None
     painted, size_was = [], None
-    sys.stdout.write("\033[?1049h\033[?25l")
+    sys.stdout.write(TAKE)
     try:
         if tty_in:
             tty.setcbreak(sys.stdin.fileno())
@@ -796,6 +887,21 @@ def main():
             i = 0
             while i < len(typing):
                 key = typing[i]
+                if typing[i:i + 3] == "\x1b[<":
+                    # A mouse report: button;column;row then M (press) or m (release).
+                    m = re.match(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])", typing[i:])
+                    if not m:
+                        break                        # cut off mid-report; the rest comes next read
+                    i += m.end()
+                    b, x, y, press = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4) == "M"
+                    if v.editing or not press:
+                        continue
+                    if b & 0x43 == 0:                # left button, any modifier
+                        v.click(x, y)
+                    elif b & 0x40:                   # the wheel: 64 up, 65 down
+                        v.move(1 if b & 1 else -1)
+                    v.typed = ""
+                    continue
                 if key == "\x1b" and typing[i + 1:i + 2] in ("[", "O"):
                     arrow = typing[i + 2:i + 3]      # \x1b[A / \x1bOA, terminal depending
                     i += 3
@@ -841,6 +947,12 @@ def main():
                     handover(old, [CCEX, "add"])
                     painted, size_was = [], None      # the login wrote all over the screen
                     v.sampled = v.walked = 0.0
+                elif key == "s":
+                    v.resort(1)
+                    v.typed = ""
+                elif key == "S":
+                    v.resort(0)
+                    v.typed = ""
                 elif key in ("+", "="):
                     v.every = next((p for p in PRESETS if p > v.every), PRESETS[-1])
                     v.typed = ""
@@ -862,7 +974,7 @@ def main():
                 # pipes its child is writing to, and the child dies on its next line, half
                 # way through moving a credential. It restarts on the next tick instead.
                 if v.mtime() != v.stamp and not v.busy:
-                    sys.stdout.write("\033[?25h\033[?1049l")
+                    sys.stdout.write(GIVE)
                     sys.stdout.flush()
                     if old:
                         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old)
@@ -870,7 +982,7 @@ def main():
     except KeyboardInterrupt:
         return 0
     finally:
-        sys.stdout.write("\033[?25h\033[?1049l")
+        sys.stdout.write(GIVE)
         sys.stdout.flush()
         if old:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old)

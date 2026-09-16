@@ -35,6 +35,11 @@ once, followed by what rotation would do next:
   CHECKED   how old those numbers are; `live` means a session is reporting now
   REFRESH   how long the login itself has before it needs a browser again
 
+The rows are in rotation's order: the live account, then the one a switch would land on,
+and so on. --sort <column> orders them by one column instead -- #, pool, cap, account, 5h,
+5h-reset, weekly, weekly-reset, checked, refresh, or rotation -- and the column wears ▾ on
+its header. Each window is two: how spent it is, and how soon it comes back (RESETS).
+
 --json prints the rows the table is drawn from, for anything else that wants them: every
 account, or the one you name.
 
@@ -53,6 +58,7 @@ it needs a few minutes of readings before it can say.
   --refresh 15m allow one real check when nothing has reported for that long (off by
                 default, and never while the background daemon is doing it)
   --rotate      switch here, not just report it, when the live account is out of room
+  --sort COL    start ordered by that column rather than rotation's order (see `ccex ls -h`)
   --no-verify   predict, and switch, on the numbers already on file; see `ccex rotate -h`
 
   up/down  move the selection, enter switches to it
@@ -60,6 +66,8 @@ it needs a few minutes of readings before it can say.
   0-9      or type an account's number, y to confirm (backspace edits)
   a        add an account: the browser login runs here, then the table has it
   c        cap the selected account: 5h percentage, then weekly, - for uncapped
+  s        order the rows by the next column along; S turns the current order round --
+           or click a column header; a click on a row selects it, the wheel moves
   +/-      re-pace it (10s, 30s, 1m, 5m, 15m, 30m)   r  re-read now    q  quit
 
 The table is the one `ccex ls` prints (see `ccex ls -h` for its columns), redrawn as the
@@ -347,6 +355,7 @@ case "$cmd" in
           --every|--refresh) [ $# -ge 2 ] || die "$1 needs a duration like 5s"
                              wargs+=("$1" "$(secs "$2")"); shift ;;
           --at)       [ $# -ge 2 ] || die "--at needs a percentage"; wargs+=(--at "$2"); shift ;;
+          --sort)     [ $# -ge 2 ] || die "--sort needs a column (try: ccex ls -h)"; wargs+=(--sort "$2"); shift ;;
           --rotate|--once|--no-verify) wargs+=("$1") ;;
           *)          die "ls: '$1' is not a --watch option (try: ccex ls -h)" ;;
         esac
@@ -364,7 +373,12 @@ case "$cmd" in
     # One table, drawn by the watch view: `ccex ls` is `ccex ls -w` once, so the two never
     # disagree about a column. --force asks every account first, then the table reads it.
     [ "$how" = --force ] && limits --all --tsv --force >/dev/null
-    exec python3 "$CCEX_PY/watch.py" --once
+    sort=()
+    while [ $# -gt 0 ]; do
+      case "$1" in --sort) [ $# -ge 2 ] || die "--sort needs a column (try: ccex ls -h)"; sort=(--sort "$2"); shift ;; esac
+      shift
+    done
+    exec python3 "$CCEX_PY/watch.py" --once ${sort[@]+"${sort[@]}"}
     ;;
   add)
     # A name is optional: the account knows its own, we just cannot ask until it has
