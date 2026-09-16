@@ -3,7 +3,7 @@
 The bash side exports CCEX_BASE and CCEX_ROOT so every module agrees on where
 the live account and the parked ones live.
 """
-import datetime, json, os, re, time
+import datetime, json, os, re, sys, time
 
 import creds
 
@@ -609,5 +609,23 @@ def step(msg, log=True):
                 f.write("%s  ccex: %s\n" % (
                     datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg))
     except OSError:
+        pass
+
+
+def note(msg, log=True, hint=""):
+    """`step`, said out loud as well when there is a terminal listening.
+
+    Asking one account takes seconds and can take most of a minute, and a switch may ask
+    three of them before it lands. The live view has the trail to show meanwhile; a person
+    who typed `ccex use` has a cursor and nothing else, which reads as a command that has
+    hung -- and the thing you do to something that has hung is interrupt it, halfway through
+    the switch you asked for. `hint` is for what only a person waiting needs, like how long
+    the wait can be; the trail keeps the line it already had.
+    """
+    step(msg, log)
+    try:
+        if sys.stderr.isatty():
+            print("ccex: %s%s" % (msg, hint), file=sys.stderr)
+    except (OSError, ValueError):
         pass
 

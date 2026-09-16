@@ -5,9 +5,9 @@ ahead when a switch is close, and `ccex use` asks the account you named -- three
 were writing three sets of lines for the same event. This is the event: the trail says the
 same thing whether a timer started it or you pressed a key.
 """
-from ccexlib import REFUSED, step
+from ccexlib import REFUSED, note
 from decide import reads
-from probe import probe
+from probe import TIMEOUT, probe
 from usage import account_json
 
 
@@ -25,14 +25,15 @@ def ask(name, d, was=None, miss="", refused=None):
     The row is re-read here rather than by the caller: all three of them wanted exactly the
     same thing, which is what the account looks like now that it has answered.
     """
-    step("asking %s%s" % (name, "" if was is None else " (on file: %s)" % was))
+    note("asking %s%s" % (name, "" if was is None else " (on file: %s)" % was),
+         hint=" -- a session on it, up to %ds" % TIMEOUT)
     st = probe(d)
     if st in REFUSED:
-        step("%s says no (%s)%s" % (name, st, miss if refused is None else refused))
+        note("%s says no (%s)%s" % (name, st, miss if refused is None else refused))
         return st, None
     if st != "ok":
-        step("%s did not answer (%s)%s" % (name, st, miss))
+        note("%s did not answer (%s)%s" % (name, st, miss))
         return st, None
     row = account_json(name, d)
-    step("%s answered %s" % (name, reads(row)))
+    note("%s answered %s" % (name, reads(row)))
     return st, row

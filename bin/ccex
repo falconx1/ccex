@@ -95,7 +95,9 @@ is the quickest.
 Sessions you already have open follow the switch.
 
 The account you name is asked what it has left before the slot moves -- the same reading
-rotation takes, through the same code, into the same trail the live view shows. If it comes
+rotation takes, through the same code, into the same trail the live view shows. That takes a
+session on it, seconds usually and up to 50 at worst, and it says so while it waits;
+--no-check skips it. If it comes
 back spent, the slot goes to the next account with room instead and says so: naming an
 account is not an instruction to sit at 93% while the daemon moves off it seconds later.
 `--anyway` is how you say you meant it. The report afterwards reads that same answer, so
