@@ -8,10 +8,15 @@ tokens stay exactly where they are.
 
 ```console
 $ ccex ls
-#   ACCOUNT        EMAIL                    TIER    TOKEN   REFRESH  5H                     WEEKLY                     CHECKED
-1   *default       ada@example.com          max_5x  active  20-09    ████░░░░░░   41% 3h21m ██░░░░░░░░   23% 14h41m   live
-2    personal      ada.lovelace@gmail.com   pro     stale   21-09    ░░░░░░░░░░    4% 1h41m ██░░░░░░░░   18% 18h41m   8m ago
-3    client-acme   ada@acme.example         max_5x  active  22-09    █░░░░░░░░░    9% 2h51m ████░░░░░░   36% 4d 8h41m  4m ago
+ ccex  3 accounts  live: ada@example.com  switch at 90% (daemon)  every 10s   09:44:12
+    # POOL  CAP     ACCOUNT                    5H                               WEEKLY                        CHECKED  REFRESH
+ ▶  1 in    -       ada@example.com            41% █████░░░░░╵░ 3h 21m 08s      23% ███░░░░░░░░╵ 14h 41m 08s  live     29d 07h
+    3 in    -       ada@acme.example            9% █░░░░░░░░░╵░ 2h 51m 08s      36% ████░░░░░░░╵ 4d 08h 41m   4m ago   11d 22h
+    2 in    -       ada.lovelace@gmail.com      4% ░░░░░░░░░░╵░ 1h 41m 08s      18% ██░░░░░░░░░╵ 18h 41m 08s  8m ago   19h 40m
+
+ next switch  in 1h 02m (10:46)  5h is at 41%, climbing 47.0% an hour to its 90% cap
+              -> 3 ada@acme.example at 9% 5h / 36% weekly
+ rotation     rotating on data change, every 10s, next read in 6s at 90%
 
 $ ccex use 3
 ccex: ada@example.com -> parked as 'ada'; ada@acme.example -> live
@@ -129,10 +134,10 @@ $ ccex ls -w
 
 ```
  ccex  3 accounts  live: ada@example.com  switch at 90% (daemon)  every 10s   00:35:36
-    # ACCOUNT                   5H                               WEEKLY                        ROTATION   CHECKED  REFRESH
-›▶  1 ada@example.com            62% ███████░░░╵░ 2h 49m 22s      23% ███░░░░░░░░╵ 14h 09m 22s in pool    1m ago   29d 07h
-    2 ada@acme.example            9% █░░░░░░░░░╵░ 2h 19m 22s      36% ████░░░░░░░╵ 4d 08h 09m  in pool    1m ago   11d 22h
-    3 ada.lovelace@gmail.com      4% ░░░░░╵░░░░░░ 1h 09m 22s      18% ██░╵░░░░░░░░ 18h 09m 22s cap 50/30  1m ago   19h 40m
+    # POOL  CAP     ACCOUNT                    5H                               WEEKLY                        CHECKED  REFRESH
+›▶  1 in    -       ada@example.com            62% ███████░░░╵░ 2h 49m 22s      23% ███░░░░░░░░╵ 14h 09m 22s  1m ago   29d 07h
+    2 in    -       ada@acme.example            9% █░░░░░░░░░╵░ 2h 19m 22s      36% ████░░░░░░░╵ 4d 08h 09m   1m ago   11d 22h
+    3 held  50/30   ada.lovelace@gmail.com      4% ░░░░░╵░░░░░░ 1h 09m 22s      18% ██░╵░░░░░░░░ 18h 09m 22s  1m ago   19h 40m
 
  next switch  in 2h 27m 22s (03:02)  5h is at 62%, climbing 11.4% an hour to its 90% cap
               -> 3 ada.lovelace@gmail.com at 4% 5h / 18% weekly
@@ -163,10 +168,13 @@ destination needs no readings at all, so it is always there. A window that refil
 before the cap is reached says `weekly resets first` instead of naming a time that would
 never arrive.
 
-Each row is one account by email, then each window as a percentage, a bar, and how long
-until it resets. `▶` marks the account you are billing and `›` the one the arrows are on.
-`ROTATION` answers the only question the old `x`/`c`/`X` marks were answering — whether
-rotation may choose this account — in words: `in pool`, `held`, or `cap 50/30`.
+It is the same table `ccex ls` prints — there is one, so the two can never disagree about a
+column — redrawn as the numbers land. `▶` marks the account you are billing and `›` the one
+the arrows are on. `POOL` and `CAP` sit by the number because those are the things you act
+on: `in` or `held` says whether rotation may choose the account, and `ccex pool in 3` is the
+way back; `CAP` is how far rotation may spend it if the account sets its own limits, `50/30`,
+or `-` when it follows the defaults. They are two columns because they are two facts: a held
+account keeps its cap for when it is back.
 
 | Key | |
 | --- | --- |
@@ -474,8 +482,8 @@ $ ccex pool out 4
 ccex: ada.lovelace@gmail.com is out of the rotation pool; its login is untouched
 ```
 
-A held account is marked `x` in `ccex ls` — the same mark whether you held it or rotation
-did (below) — and is never chosen as a rotation destination.
+A held account reads `held` in the `POOL` column of `ccex ls` — the same word whether you
+held it or rotation did (below) — and is never chosen as a rotation destination.
 Its login is kept, so `ccex pool in 4` puts it straight back with no browser round-trip —
 useful for a personal account you don't want work billed to, or one you're saving.
 
@@ -502,19 +510,20 @@ ccex: ada@example.com is at 34% 5h / 99% weekly (weekly over 99%), so -> ada@acm
 9% 5h / 36% weekly; out of the pool until `ccex pool in`: default (weekly at 99%)
 
 $ ccex ls
-#   ACCOUNT      EMAIL              TIER    ...  5H                     WEEKLY
-1 x default      ada@example.com    max_5x  ...  ███░░░░░░░   34% 2h11m █████████░   99% 5d 4h11m
+    # POOL  CAP     ACCOUNT                    5H                               WEEKLY
+ ▶  1 held  -       ada@example.com            34% ████░░░░░░╵░ 2h 11m 40s      99% ████████████ 5d 04h 11m
 ```
 
-It is marked `x`, the same as an account you held by hand, because it is the same state —
+It reads `held`, the same as an account you held by hand, because it is the same state —
 out of the pool — only reached by itself. There is no second word for it and no second
-mark. `ccex pool in` is the way back either way: an account you spent to the end of its
+column. `ccex pool in` is the way back either way: an account you spent to the end of its
 week is one you meant to spend, and when it rejoins is your call, not a timer's.
 
-A cap makes no difference to this. An account under one only reaches 99% because that cap
-gave way in the last hours of its week (see [Caps](#caps)), so it is a spent week either
-way — and a spent week is a spent week. It does mean a capped account comes out of the pool
-in the last hours of most weeks, and `ccex pool in` is how it goes back.
+An account under a cap is not taken out this way. It only reaches 99% because that cap gave
+way in the last hours of its week (see [Caps](#caps)), and the cap already does what a hold
+would: rotation will not land on it above the line, and the line is back where you set it
+the moment the new week starts. Holding it too would mean a `ccex pool in` at the start of
+every week for an account that was never yours to spend to the end.
 
 Only the week does this. Running a 5-hour window down is ordinary rotation — it refills
 while you work — so nothing is taken out for it. And rotation still moves you *off* a held
@@ -584,17 +593,17 @@ ccex: ada@example.com is at 92% 5h / 40% weekly (5h over 90%), and every other a
 too; capped by their own limits: personal at its own 50%
 ```
 
-Capped accounts are marked `c` in `ccex ls`, which also grows a `CAP` column once anything
-is capped — `60/99` caps both windows, `-/25` only the week, `-` neither. The column isn't
-there at all until you cap something, so a setup that doesn't use caps reads exactly as
-before:
+The `CAP` column of `ccex ls` shows what is set — `60/99` caps both windows, `-/25` only the
+week, `-` neither — and the meters grow a tick where that account counts as out of room. It
+is a separate column from `POOL` because they are two different facts: a held account can
+carry a cap for when it is back.
 
 ```console
 $ ccex ls
-#   ACCOUNT        EMAIL                    TIER    TOKEN   REFRESH  5H                     WEEKLY                     CAP     CHECKED
-1   *default       ada@example.com          max_5x  active  20-09    ████░░░░░░   41% 3h21m ██░░░░░░░░   23% 14h41m   -       live
-2   c personal     ada.lovelace@gmail.com   pro     stale   21-09    ░░░░░░░░░░    4% 1h41m ██░░░░░░░░   18% 18h41m   50/30   8m ago
-3    client-acme   ada@acme.example         max_5x  active  22-09    █░░░░░░░░░    9% 2h51m ████░░░░░░   36% 4d 8h41m  95/-    4m ago
+    # POOL  CAP     ACCOUNT                    5H                               WEEKLY                        CHECKED  REFRESH
+ ▶  1 in    -       ada@example.com            41% █████░░░░░╵░ 3h 21m 08s      23% ███░░░░░░░░╵ 14h 41m 08s  live     29d 07h
+    3 in    95/-    ada@acme.example            9% █░░░░░░░░░░╵ 2h 51m 08s      36% ████░░░░░░░╵ 4d 08h 41m   4m ago   11d 22h
+    2 held  50/30   ada.lovelace@gmail.com      4% ░░░░░░╵░░░░░ 1h 41m 08s      18% ███╵░░░░░░░░ 18h 41m 08s  8m ago   19h 40m
 ```
 
 `ccex ls <account>` prints it in full:
@@ -772,7 +781,7 @@ Rotate now
 Quit
 ```
 
-The same columns as `ccex ls -w`, in its order: the number, the account, then each window
+The same columns as `ccex ls`, in its order: the number, the account, then each window
 as a percentage, its meter and the clock it comes back on — `new` for one that already has
 and has had nothing measured since. The live account gets the same row as everyone else,
 marked where its number would be.
@@ -833,25 +842,34 @@ running, and plain `ccex tray` runs it in this terminal instead of as a service.
 
 ## Reading `ccex ls`
 
-**TOKEN** is the short-lived token Claude Code sends with each request. Claude Code
-renews it silently, so `stale` is normal and harmless — it only means nothing has used
-that account lately.
+`ccex ls` and `ccex ls -w` draw one table; `ls` prints it once, with the same forecast
+underneath. The rows are in rotation's order — the account you are on, then the one a
+switch would land on, and so on down to what rotation will not reach.
 
-**CAP** is only present once some account has one, and shows that account's own
-out-of-room percentages as `5h/weekly` — `-` for a window that still follows `--at`.
+**#** is the number `ccex use` and `ccex pool` take, keyed to the account so it survives
+rotations. `▶` marks the live account.
 
-**5H** and **WEEKLY** each show how much of that window is spent, then how long until it
-resets. Note that the two don't rank accounts the same way: `22% 26m` is a better place to
-land than `18% 17h24m`, because the first is minutes from starting over. `ccex rotate`
-weighs that; the bar just shows you the spend.
+**POOL** is whether rotation may choose the account: `in`, or `held` — by you, or by
+rotation when it found the week spent or the account refused. `ccex pool in` is the way back.
 
-**TOKEN** and **REFRESH** are the two OAuth clocks. **TIER** is your plan's rate-limit tier with the boilerplate trimmed — `max_5x` rather
-than `default_claude_max_5x`.
+**CAP** shows that account's own out-of-room percentages as `5h/weekly` — `-` for a window
+that still follows `--at`, and `*` while the week's number is not the one you set (see
+[Caps](#capping-one-accounts-share)).
 
-**REFRESH** is the one that matters. It's what buys new access tokens, it lasts on the
-order of a month, and when that date passes the account needs a real browser login again.
-Both values are read straight out of `.credentials.json` (`expiresAt` and
-`refreshTokenExpiresAt`) — nothing is sent anywhere to compute them.
+**ACCOUNT** is the account, by address. `ccex use` takes that, its number, or its slot name;
+`ccex ls --json` has the slot names.
+
+**5H** and **WEEKLY** each show how much of that window is spent, a meter with a tick where
+this account counts as out of room, then how long until it resets. Note that the two don't
+rank accounts the same way: `22% 26m` is a better place to land than `18% 17h 24m`, because
+the first is minutes from starting over. `ccex rotate` weighs that; the bar just shows you
+the spend.
+
+**CHECKED** is how old the numbers are; `live` means a session is reporting them now.
+
+**REFRESH** is how long the login has left. The refresh token is what buys new access tokens,
+it lasts on the order of a month, and when it runs out the account needs a real browser login
+again. It is read straight out of `.credentials.json` — nothing is sent anywhere to compute it.
 
 ## How it works
 

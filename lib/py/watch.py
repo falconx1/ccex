@@ -119,6 +119,7 @@ class Line:
 
 
 TAIL = 9            # CHECKED and REFRESH: both a short word or a two-part clock
+POOL, CAP = 6, 8    # `held` or `in`; two percentages with a slash and a star between them
 
 GAP = "    "        # between the two windows: each is a percentage, a bar and a clock, and
                     # they read as one thing only if there is space around them
@@ -135,7 +136,7 @@ def layout(width):
     bar = 16 if width >= 132 else 12 if width >= 100 else 10
     secs = width >= 104                      # a countdown to the second, not just the minute
     cell = 5 + bar + 1 + (11 if secs else 10)
-    fixed = 2 + 4 + cell + len(GAP) + cell + 12          # everything but the address and the tails
+    fixed = 2 + 4 + POOL + CAP + cell + len(GAP) + cell   # all but the address and the tails
     mail = next((m for m in (30, 26, 22) if width >= fixed + m + TAIL + TAIL), 20)
     return bar, secs, mail, cell, width >= fixed + mail + TAIL, \
         width >= fixed + mail + TAIL + TAIL
@@ -202,6 +203,7 @@ class View:
         self.timer, self.note, self.busy = dict(NO_UNIT), "", ""
         self.asked, self.walked, self.pids = 0.0, 0.0, {}
         self.serving = False
+        self.once = False              # a one-shot table: no cursor to draw, no keys to list
         self.last_live, self.switches = None, []
         self.typed = ""                # account number being typed, waiting for y to confirm
         self.cursor = None             # email of the selected row, kept across re-sorts
@@ -466,9 +468,9 @@ class View:
         head.add(time.strftime(" %H:%M:%S"), DIM)
         L.append(head)
 
-        hdr = Line().add("    # ", REV).add("ACCOUNT", REV, mail)
+        hdr = Line().add("    # ", REV).add("POOL", REV, POOL).add("CAP", REV, CAP)
+        hdr.add("ACCOUNT", REV, mail)
         hdr.add("5H", REV, cell + len(GAP)).add("WEEKLY", REV, cell)
-        hdr.add(" ROTATION", REV, 12)
         if agecol:
             hdr.add("CHECKED", REV, TAIL)
         if refcol:
@@ -499,11 +501,33 @@ class View:
             here = a["name"] == "default"
             # The account you are billing is the one fact you look for first, so it gets an
             # arrow, not a punctuation mark in a column of them.
-            on = self.selected()
+            on = None if self.once else self.selected()   # nothing to point at in a one-shot
             cursor = bool(on and on["email"] == a["email"])
             row = Line().add("›", CYAN + BOLD) if cursor else Line().add(" ")
             row.add("▶", GREEN + BOLD) if here else row.add(" ")
             row.add("%3s " % (a["id"] or "-"), BOLD if here else GREY)
+            # Whether rotation may choose this account sits by its number, because that and
+            # the number are the two things you act on: `ccex use 3`, `ccex pool in 3`. One
+            # pool state, whoever put it there: out of the pool is out of the pool, and
+            # `ccex pool in` is the way back from either. Why it went is worth a sentence,
+            # not a second word in a six-column cell.
+            if a["held"]:
+                row.add("held", YELLOW, POOL)
+            else:
+                row.add("in", GREY, POOL)      # not `colour`: that is this frame's own flag
+            # How far rotation may spend this account is a separate fact from whether it
+            # may choose it, so it has its own column: a held account keeps its cap for when
+            # it is back, and neither hides the other.
+            if a["cap_five"] or a["cap_seven"]:
+                # what it is held to now, not what it was set to: a cap gives way as its week
+                # ends, and the view has to say the number rotation is actually using
+                e5, e7 = cap(a, "five", self.at), cap(a, "seven", self.at)
+                gave = (a["cap_five"] and e5 != a["cap_five"]) or \
+                       (a["cap_seven"] and e7 != a["cap_seven"])
+                row.add("%s/%s%s" % (e5 if a["cap_five"] else "-",
+                                     e7 if a["cap_seven"] else "-", "*" if gave else ""), CYAN, CAP)
+            else:
+                row.add("-", GREY, CAP)
             row.add(fit_email(a["email"], mail - 1), BOLD if here else DIM, mail)
             for n, (key, rk, pk) in enumerate((("five", "rate_five", "five_resets"),
                                                ("seven", "rate_seven", "seven_resets"))):
@@ -530,24 +554,6 @@ class View:
                         row.add(hms(left) if secs else hm(left), tint, clock)
                 if n == 0:
                     row.add(GAP)
-            # Why rotation would or would not choose this account, in words: the marks it
-            # used to be (c, x) both meant something about this one question.
-            state, tint = "in pool", GREY      # not `colour`: that is this frame's own flag
-            if a["held"]:
-                # One state, whoever put it there: an account out of the pool is out of the
-                # pool, and `ccex pool in` is the way back from either. Why it went is worth
-                # saying in a sentence, not worth a second word in a twelve-column cell.
-                state, tint = "held", YELLOW
-            elif a["cap_five"] or a["cap_seven"]:
-                # what it is held to now, not what it was set to: a cap gives way as its week
-                # ends, and the view has to say the number rotation is actually using
-                e5, e7 = cap(a, "five", self.at), cap(a, "seven", self.at)
-                gave = (a["cap_five"] and e5 != a["cap_five"]) or \
-                       (a["cap_seven"] and e7 != a["cap_seven"])
-                state = "cap %s/%s%s" % (e5 if a["cap_five"] else "-",
-                                         e7 if a["cap_seven"] else "-", "*" if gave else "")
-                tint = CYAN
-            row.add(" " + state, tint, 12)
             if agecol:
                 # cut a word short of the column: with another column behind it, a cell that
                 # fills its own width runs into the next one
@@ -652,7 +658,8 @@ class View:
             keys.add("+/-", REV).add(" pace  ").add("r", REV).add(" refresh  ")
             keys.add("q", REV).add(" quit   ")
             keys.add("up %s" % hm(now - self.started), GREY)
-        L.append(keys)
+        if not self.once:              # a one-shot has no keys to press
+            L.append(keys)
 
         if trail:
             L.append(Line().add(" switching    ", BOLD)
@@ -738,10 +745,13 @@ def main():
 
     tty_in, tty_out = sys.stdin.isatty(), sys.stdout.isatty()
     if once or not tty_out:
-        # Piped to a file or a test: plain text, no escapes, one block per data tick.
+        # One block per data tick. On a terminal it is the same frame the live view draws,
+        # once; piped to a file or a test it is plain text, wide enough that nothing in it is
+        # cut short, because whatever reads it is matching on an address or a header.
+        v.once = once
         while True:
-            width = shutil.get_terminal_size((120, 40)).columns if tty_out else 120
-            print("\n".join(v.frame(width, 40, colour=False)), flush=True)
+            width = shutil.get_terminal_size((120, 40)).columns if tty_out else 200
+            print("\n".join(v.frame(width, 40, colour=tty_out)), flush=True)
             if once:
                 return 0
             time.sleep(v.every)

@@ -19,18 +19,21 @@ usage() {   # `ccex -h` for the overview, `ccex <command> -h` for one command
 ccex ls [<account>] [--force] [--json]
 ccex ls -w|--watch [--every 5s] [--at N] [--refresh 15m] [--rotate]
 
-With no account, every account as one row each:
+With no account, every account as one row each -- the same table `ccex ls -w` draws,
+once, followed by what rotation would do next:
 
-  #         its number: `ccex use 3` is the whole switch
-  ACCOUNT   slot name; * marks the live one, x one held out of the rotation pool --
-            by you, or by rotation when it found the account spent or unable to answer
-  TOKEN     access token: active, or stale until something uses the account
-  REFRESH   when the login itself expires and needs a browser again
-  5H        share of the 5-hour window spent, and how long until it resets
-  WEEKLY    the same for the week
+  #         its number: `ccex use 3` is the whole switch; ▶ marks the live account
+  POOL      `in` when rotation may choose this account, `held` when it is out of the
+            rotation pool -- by you, or by rotation when it found the account spent or
+            refused
   CAP       5h/weekly percentages this account counts as out of room at, if it sets its
-            own (`ccex pool cap`); the column is only there once something is capped
+            own (`ccex pool cap`); `-` when it follows the defaults
+  ACCOUNT   the account, by address; `ccex use` takes that, its number, or its slot name
+  5H        share of the 5-hour window spent, a meter with a tick where this account
+            counts as out of room, and how long until it resets
+  WEEKLY    the same for the week
   CHECKED   how old those numbers are; `live` means a session is reporting now
+  REFRESH   how long the login itself has before it needs a browser again
 
 --json prints the rows the table is drawn from, for anything else that wants them: every
 account, or the one you name.
@@ -59,12 +62,9 @@ it needs a few minutes of readings before it can say.
   c        cap the selected account: 5h percentage, then weekly, - for uncapped
   +/-      re-pace it (10s, 30s, 1m, 5m, 15m, 30m)   r  re-read now    q  quit
 
-Each row is one account by email, then each window as a percentage, a bar with a tick
-where that account counts as out of room, and how long until it resets. `▶` marks the
-account you are billing, `›` the one the arrows are on, and ROTATION says whether
-rotation may choose it -- in pool, held, or its own cap. CHECKED is how old
-its numbers are and REFRESH how long its login lasts -- the refresh token's own clock,
-which is what ends in a browser. Both give way on a narrow terminal.
+The table is the one `ccex ls` prints (see `ccex ls -h` for its columns), redrawn as the
+numbers land. `▶` marks the account you are billing, `›` the one the arrows are on. CHECKED
+and REFRESH give way on a narrow terminal, then the address is shortened.
 
 The estimate is about the 5-hour window, which is what actually stops you working; the
 week only joins it once it is past 90%. Both read the same per-account caps rotation
@@ -361,36 +361,10 @@ case "$cmd" in
       limits --quiet "$how" ${all:+--all} "$@"; exit 0 ;;
     esac
     if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then limits --quiet "$how" "$@"; exit 0; fi
-    cur="${CLAUDE_CONFIG_DIR:-$BASE}"
-    declare -A ID FIVE SEVEN WHEN FLAGS CAP
-    capcol=0
-    while IFS=$'\t' read -r n i f s w g c; do
-      ID[$n]=$i; FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; FLAGS[$n]=$g; CAP[$n]=$c
-      [ "$c" != - ] && capcol=1        # nobody has capped anything: no column, same row as before
-    done < <(limits --all --tsv "$how")
-    hdr='%-3s %-2s%-18s %-30s %-7s %-7s %-8s %-22s %-26s '
-    fmt='%-3s %-2s%-18s %-30s %-7s %-7s %-8s %s %s '
-    [ "$capcol" = 1 ] && { hdr+='%-7s '; fmt+='%-7s '; }
-    hdr+='%s\n'; fmt+='%s\n'
-    capname=(); [ "$capcol" = 1 ] && capname=(CAP)
-    # shellcheck disable=SC2059
-    printf "$hdr" '#' '' ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY \
-      ${capname[@]+"${capname[@]}"} CHECKED
-    while read -r p; do
-      d=$(dir_for "$p")
-      mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
-      case ",${FLAGS[$p]:-}," in                 # held wins: a cap is moot on an account
-        *,held,*) mark="${mark% }x" ;;            # out of the pool, by your hand or rotation's
-        *,cap,*)  mark="${mark% }c" ;;
-      esac
-      IFS=$'\t' read -r email tier state rstate < <(info "$d")
-      row=("${ID[$p]:--}" "$mark" "$p" "$email" "$tier" "$state" "$rstate" \
-           "${FIVE[$p]:--}" "${SEVEN[$p]:--}")
-      [ "$capcol" = 1 ] && row+=("${CAP[$p]:--}")
-      row+=("${WHEN[$p]:--}")
-      # shellcheck disable=SC2059
-      printf "$fmt" "${row[@]}"
-    done < <(profiles) | sort -n        # by id, so the numbers you type read in order
+    # One table, drawn by the watch view: `ccex ls` is `ccex ls -w` once, so the two never
+    # disagree about a column. --force asks every account first, then the table reads it.
+    [ "$how" = --force ] && limits --all --tsv --force >/dev/null
+    exec python3 "$CCEX_PY/watch.py" --once
     ;;
   add)
     # A name is optional: the account knows its own, we just cannot ask until it has
