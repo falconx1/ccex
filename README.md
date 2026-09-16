@@ -9,7 +9,7 @@ tokens stay exactly where they are.
 ```console
 $ ccex ls
  ccex  3 accounts  live: ada@example.com  switch at 90% (daemon)  every 10s   09:44:12
-    # POOL  CAP     ACCOUNT                    5H                               WEEKLY                        CHECKED  REFRESH
+    # POOL  CAP     ACCOUNT                    5H                RESETS         WEEKLY            RESETS      CHECKED  REFRESH
  ▶  1 in    -       ada@example.com            41% █████░░░░░╵░ 3h 21m 08s      23% ███░░░░░░░░╵ 14h 41m 08s  live     29d 07h
     3 in    -       ada@acme.example            9% █░░░░░░░░░╵░ 2h 51m 08s      36% ████░░░░░░░╵ 4d 08h 41m   4m ago   11d 22h
     2 in    -       ada.lovelace@gmail.com      4% ░░░░░░░░░░╵░ 1h 41m 08s      18% ██░░░░░░░░░╵ 18h 41m 08s  8m ago   19h 40m
@@ -134,7 +134,7 @@ $ ccex ls -w
 
 ```
  ccex  3 accounts  live: ada@example.com  switch at 90% (daemon)  every 10s   00:35:36
-    # POOL  CAP     ACCOUNT                    5H                               WEEKLY                        CHECKED  REFRESH
+    # POOL  CAP     ACCOUNT                    5H                RESETS         WEEKLY            RESETS      CHECKED  REFRESH
 ›▶  1 in    -       ada@example.com            62% ███████░░░╵░ 2h 49m 22s      23% ███░░░░░░░░╵ 14h 09m 22s  1m ago   29d 07h
     2 in    -       ada@acme.example            9% █░░░░░░░░░╵░ 2h 19m 22s      36% ████░░░░░░░╵ 4d 08h 09m   1m ago   11d 22h
     3 held  50/30   ada.lovelace@gmail.com      4% ░░░░░╵░░░░░░ 1h 09m 22s      18% ██░╵░░░░░░░░ 18h 09m 22s  1m ago   19h 40m
@@ -142,7 +142,7 @@ $ ccex ls -w
  next switch  in 2h 27m 22s (03:02)  5h is at 62%, climbing 11.4% an hour to its 90% cap
               -> 3 ada.lovelace@gmail.com at 4% 5h / 18% weekly
  rotation     rotating on data change, every 10s at 90%
- keys         ↑↓ select  enter switch to it  number by number  +/- pace  r refresh  q quit   up 0m
+ keys         ↑↓ select  enter switch  ←→ out/in  a add  c cap  s/S sort  +/- pace  r refresh  q quit   up 0m
 ```
 
 `ccex ls` tells you where you stand; `ccex ls -w` leaves it on screen and folds the
@@ -183,6 +183,7 @@ account keeps its cap for when it is back.
 | `a` | add an account — the browser login runs here, then the table has it |
 | `c` | cap the selected account: type the 5-hour percentage, `enter`, then the weekly one (`-` leaves a window uncapped) |
 | `→` / `←` | take it out of the rotation pool, or put it back — including one rotation held itself |
+| `s` / `S` | order the rows by the next column along, or turn the current order round; the header wears `▾` or `▴`. Clicking a header does the same, a click on a row selects it, and the wheel moves the selection |
 | `+` / `-` | re-pace the data tick (10s, 30s, 1m, 5m, 15m, 30m) |
 | `r` | re-read everything now, `/proc` included |
 | `q` | quit |
@@ -193,6 +194,7 @@ account keeps its cap for when it is back.
 | `--at N` | threshold to predict against; defaults to whatever `--bg` is running at |
 | `--refresh 15m` | allow one real check when nothing has reported for that long |
 | `--rotate` | switch from here, not just report it |
+| `--sort weekly` | start ordered by one column — `#`, `pool`, `cap`, `account`, `5h`, `5h-reset`, `weekly`, `weekly-reset`, `checked`, `refresh` — rather than rotation's order; `ccex ls` takes it too. Each window sorts two ways: by how spent it is, or by how soon it resets (the `RESETS` header over its clock) |
 
 Nothing is launched unless `--refresh` says it may (it is off by default), and never while
 the background daemon is running; when it does happen, the check runs off the render loop,
@@ -510,7 +512,7 @@ ccex: ada@example.com is at 34% 5h / 99% weekly (weekly over 99%), so -> ada@acm
 9% 5h / 36% weekly; out of the pool until `ccex pool in`: default (weekly at 99%)
 
 $ ccex ls
-    # POOL  CAP     ACCOUNT                    5H                               WEEKLY
+    # POOL  CAP     ACCOUNT                    5H                RESETS         WEEKLY            RESETS
  ▶  1 held  -       ada@example.com            34% ████░░░░░░╵░ 2h 11m 40s      99% ████████████ 5d 04h 11m
 ```
 
@@ -600,7 +602,7 @@ carry a cap for when it is back.
 
 ```console
 $ ccex ls
-    # POOL  CAP     ACCOUNT                    5H                               WEEKLY                        CHECKED  REFRESH
+    # POOL  CAP     ACCOUNT                    5H                RESETS         WEEKLY            RESETS      CHECKED  REFRESH
  ▶  1 in    -       ada@example.com            41% █████░░░░░╵░ 3h 21m 08s      23% ███░░░░░░░░╵ 14h 41m 08s  live     29d 07h
     3 in    95/-    ada@acme.example            9% █░░░░░░░░░░╵ 2h 51m 08s      36% ████░░░░░░░╵ 4d 08h 41m   4m ago   11d 22h
     2 held  50/30   ada.lovelace@gmail.com      4% ░░░░░░╵░░░░░ 1h 41m 08s      18% ███╵░░░░░░░░ 18h 41m 08s  8m ago   19h 40m

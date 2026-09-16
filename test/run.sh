@@ -1149,6 +1149,16 @@ echo "the live view"
 teardown; setup                 # a is live at 90/40, bee at 10/20, cee at 50/30
 frame() { "$CCEX" ls -w --once --at "$1"; }
 t  "one frame lists the accounts" "b@example.com"        frame 80
+first_row() { "$CCEX" ls -w --once --at 80 "$@" | awk 'NR == 3'; }   # head line, header, then rows
+t  "rotation's order puts the live account first" "a@example.com"   first_row
+t  "--sort weekly puts the emptiest week first"   "b@example.com"   first_row --sort weekly
+t  "and marks the column"                         "WEEKLY▾"         "$CCEX" ls --sort weekly
+t  "--sort 5h likewise"                           "b@example.com"   first_row --sort 5h
+t  "each window's clock sorts on its own"         "c@example.com"   bash -c '"$1" ls --sort 5h-reset | awk "NR == 5"' _ "$CCEX"
+t  "under a header of its own"                    "RESETS▾"         "$CCEX" ls --sort weekly-reset
+t  "--sort account is alphabetical"               "a@example.com"   first_row --sort account
+t  "an unknown column is refused"                 "one of rotation" "$CCEX" ls --sort nope
+exits "and exits 1"                               1                 "$CCEX" ls --sort nope
 t  "and draws the meters"         "█"                    frame 80
 matches "the countdown ticks in seconds" '[0-9]+m [0-9][0-9]s'  frame 80
 matches "and the cap is drawn into the bar" '▕?[█░]*╵'    frame 80
@@ -1264,6 +1274,10 @@ print("editing=%s" % v.editing)
 PYEOF
 }
 t  "c opens a cap editor"          "cap "                     cap_prompt ""
+t  "s sorts by the next column"    "#▾"                       drive s
+t  "and S turns it round"          "#▴"                       drive sS
+t  "a click on a header sorts by it" "POOL▾"                   drive '\x1b[<0;10;2M'
+t  "and again turns it round"       "POOL▴"                    drive '\x1b[<0;10;2M\x1b[<0;10;2M'
 t  "on the selected account"       "a@example.com"            cap_prompt ""
 t  "digits fill the 5h field"      "5h: 60"                   cap_prompt "60|"
 t  "then it asks for the week"     "weekly:"                  cap_prompt "60|"
