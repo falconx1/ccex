@@ -48,7 +48,17 @@ PY
 
 teardown() { [ -n "${HOME:-}" ] && [ "${HOME#/tmp/}" != "$HOME" ] && rm -rf "$HOME"; }
 
-live_email() { "$CCEX" ls | awk '/\*/ {print $4}'; }
+# The table names slots, not addresses, so anything asking after an address reads the rows
+# the table is drawn from. pool_col reads the table itself: a parked row is # POOL CAP ACCOUNT.
+field_of() { "$CCEX" ls --json | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)
+if sys.argv[1] == "live": print(next(a["email"] for a in rows if a["name"] == "default"))
+else: print(next(str(a[sys.argv[1]]) for a in rows if a["email"] == sys.argv[2]))' "$@"; }
+live_email() { field_of live; }
+num_of() { field_of id "$1"; }
+pool_of() { [ "$(field_of held "$1")" = True ] && echo held || echo in; }
+pool_col() { "$CCEX" ls | awk -v n="$1" '$4 == n {print $2}'; }
 
 render_from() {   # render_from <transcript-path> <5h> <weekly>: a payload that says which
   # session it came from, so provenance rather than the numbers can decide. No reset times:
@@ -103,7 +113,7 @@ matches() {   # matches <name> <regex> <command...>
 echo "listing and numbering"
 setup
 t  "ls shows every account"      "c@example.com"        "$CCEX" ls
-t  "live account is marked"      "*"                    "$CCEX" ls
+t  "live account is marked"      "▶"                    "$CCEX" ls
 t  "numbers are assigned"        "1"                    "$CCEX" ls
 t  "ls <account> reads one"      "b@example.com"        "$CCEX" ls bee
 t  "ls never launches"           "90% used"             "$CCEX" ls a@example.com
@@ -126,24 +136,25 @@ exits "unknown account exits 1"  1                       "$CCEX" use nope
 t  "unknown flag is refused"     "unknown option"        "$CCEX" use bee --dryrun
 
 echo "numbers survive"
-n_before=$("$CCEX" ls | awk '/b@example.com/ {print $1}')
+n_before=$(num_of b@example.com)
 "$CCEX" use bee --no-check >/dev/null 2>&1
-n_after=$("$CCEX" ls | awk '/b@example.com/ {print $1}')
+n_after=$(num_of b@example.com)
 t  "number unchanged by a switch" "$n_before"            echo "$n_after"
 
 echo "the pool"
-mark_of() { "$CCEX" ls | awk -v e="$1" '$0 ~ e {print substr($0, 5, 2)}'; }
+t  "every account starts in"     "in"                    pool_col a@example.com
 t  "hold an account"             "out of the rotation"   "$CCEX" pool out a@example.com
-t  "held is marked x"            "x"                     mark_of a@example.com
+t  "held reads held under POOL"  "held"                  pool_col a@example.com
 t  "use on a held account stops" "held out of the pool"  "$CCEX" use a@example.com
 exits "and exits 1"              1                       "$CCEX" use a@example.com
 t  "rotation leaves it alone"    "out of the pool: a"    "$CCEX" rotate --at 1 -n
 t  "release it"                  "back in the rotation"  "$CCEX" pool in a@example.com
-t  "mark is cleared"             ""                      mark_of a@example.com
+t  "and it reads in again"       "in"                    pool_col a@example.com
 
 echo "per-account caps"
 teardown; setup                 # earlier sections have rotated; start from a is live, 90/40
-absent "no caps means no CAP column" "CAP"                 "$CCEX" ls
+t  "the CAP column is always there" "CAP"                "$CCEX" ls
+t  "and reads - with nothing capped" "-"                  bash -c '"$1" ls | grep b@example.com' _ "$CCEX"
 t  "cap needs a real percentage"  "1 to 100"              "$CCEX" pool cap bee --5h 101
 t  "and 0 points at pool out"     "pool out"              "$CCEX" pool cap bee --5h 0
 t  "an unknown cap flag is refused" "unknown option"      "$CCEX" pool cap bee --5hr 60
@@ -151,11 +162,9 @@ t  "the bare command is a preset" "5h 60%, weekly 75%"    "$CCEX" pool cap bee
 t  "and clearing puts it back"    "back on the defaults"  "$CCEX" pool cap bee --clear
 t  "set one window"               "5h 5%"                 "$CCEX" pool cap bee --5h 5
 t  "the other still follows --at" "weekly still follows"  "$CCEX" pool cap bee --5h 5
-t  "capped is marked c"           "c"                     mark_of b@example.com
-n_bee=$("$CCEX" ls | awk '/b@example.com/ {print $1}')
+n_bee=$(num_of b@example.com)
 t  "cap by account number"        "5h 60%, weekly 99%"    "$CCEX" pool cap "$n_bee" --5h 60 --weekly 99
 t  "and ls reads it back"         "5h 60% / weekly 99%"   "$CCEX" ls "$n_bee"
-t  "ls grows a CAP column"        "CAP"                   "$CCEX" ls
 t  "showing both windows"         "60/99"                 "$CCEX" ls
 t  "and a dash for an uncapped one" "5/-"                 bash -c '"$1" pool cap cee --5h 5 >/dev/null; "$1" ls' _ "$CCEX"
 "$CCEX" pool cap cee --clear >/dev/null
@@ -166,7 +175,7 @@ t  "a capped account is skipped"  "c@example.com"         bash -c '"$1" pool cap
 t  "and the reason is named"      "capped by their own"   bash -c '"$1" pool cap cee --5h 45 >/dev/null; "$1" rotate --at 80 -n --no-launch' _ "$CCEX"
 exits "nowhere to go exits 1"     1                       "$CCEX" rotate --at 80 -n --no-launch
 t  "clearing restores the default" "back on the defaults" "$CCEX" pool cap cee --clear
-t  "held wins over a cap in ls"   "x"                     bash -c '"$1" pool out bee >/dev/null; "$1" ls | awk "/b@example.com/ {print substr(\$0, 5, 2)}"' _ "$CCEX"
+t  "held and capped show both"    "held  5/99"            bash -c '"$1" pool out bee >/dev/null; "$1" ls | grep b@example.com' _ "$CCEX"
 "$CCEX" pool in bee >/dev/null
 t  "rm releases the cap too"      "no b@example.com"      bash -c 'printf "y\n" | "$1" rm bee >/dev/null 2>&1; grep -q b@example.com "$2/.caps.json" && echo "still there" || echo "no b@example.com"' _ "$CCEX" "$CC_PROFILE_ROOT"
 
@@ -253,7 +262,7 @@ t  "the same account again re-authenticates" "re-authenticated"    adds new@exam
 absent "and does not make a second slot"  "new-2"                  "$CCEX" ls
 t  "the live account is recognised"       "already running"        adds a@example.com
 t  "a name still works"                   "logging in to profile"  adds other@example.com work
-t  "and is used as given"                 "work"                   "$CCEX" ls
+t  "and is used as given"                 '"name": "work"'         "$CCEX" ls --json
 t  "a login that fails adds nothing"      "nothing was added"      bash -c 'PATH=/nonexistent:/usr/bin:/bin "$1" add' _ "$CCEX"
 
 echo "a spent week"
@@ -271,7 +280,7 @@ PYEOF
 spend_week "$HOME/.claude.json" 99
 t  "a spent week is over the line" "so ->"                 "$CCEX" rotate --at 80 --no-launch
 t  "and that account is held out"  "weekly at 99%"         cat "$CC_PROFILE_ROOT/.pool.json"
-t  "ls marks it x, as any hold"    "x"                     bash -c '"$1" ls | awk "/a@example.com/ {print substr(\$0, 5, 2)}"' _ "$CCEX"
+t  "ls reads held, as any hold"    "held"                  pool_of a@example.com
 absent "rotation will not go back to it" "a@example.com"    "$CCEX" rotate --at 1 -n --no-launch
 t  "pool in is the way back"       "back in the rotation"  "$CCEX" pool in a@example.com
 teardown; setup
@@ -341,10 +350,11 @@ t  "and again"                       "60/95"   cap_says 8
 t  "the last window is the default"  "90/99"   cap_says 3
 t  "a reset already passed does not" "60/75"   cap_says -3
 t  "nor does an unmeasured week"     "60/75"   cap_says none
-teardown; setup                 # a spent week is a spent week; its own cap does not excuse it
+teardown; setup                 # a cap gives way at the end of the week; the account is still not yours to hold
 spend_week "$HOME/.claude.json" 99
 "$CCEX" pool cap a@example.com --weekly 90 >/dev/null
-t  "a capped account is held out too" "weekly at 99%" \
+t  "rotation still moves off a capped spent week" "so ->" "$CCEX" rotate --at 80 -n --no-launch
+absent "but never holds that account out" "a@example.com" \
   bash -c '"$1" rotate --at 80 --no-launch >/dev/null 2>&1; cat "$2/.pool.json" 2>/dev/null' _ "$CCEX" "$CC_PROFILE_ROOT"
 
 echo "verifying before the switch"
@@ -1122,7 +1132,7 @@ t  "the switch is logged"         "so ->"                  cat "$CC_PROFILE_ROOT
 teardown; setup
 timeout 4 "$CCEX" rotate --serve --at 99 --every 1s >"$HOME/quiet.out" 2>&1
 t  "under threshold it stays quiet" "1"                    bash -c 'wc -l < "$1/quiet.out"' _ "$HOME"
-t  "and rotates nothing"          "a@example.com"          bash -c '"$1" ls | awk "/\*/ {print \$4}"' _ "$CCEX"
+t  "and rotates nothing"          "a@example.com"          live_email
 t  "refresh off never probes"     "0"                      bash -c 'grep -c max-age "$1/quiet.out" || true' _ "$HOME"
 t  "it notes when it last looked" "under"                  cat "$CC_PROFILE_ROOT/.usage/.monitor-last"
 t  "and beats once per read"     "under"                  cat "$CC_PROFILE_ROOT/.usage/.beat"
@@ -1172,7 +1182,7 @@ m["b@example.com"] = 12
 json.dump(m, open(p, "w"))
 PYEOF
 }
-t  "the keys line offers switching" "enter"                  frame 80
+absent "a one-shot lists no keys"   "enter"                  frame 80
 t  "a number asks before moving"    "switch to"            prompt_line "$(number_of)"
 t  "and names the account"          "b@example.com"        prompt_line "$(number_of)"
 t  "an unknown number says so"      "no account has that number" prompt_line 47
@@ -1226,14 +1236,15 @@ export CCEX_TEST_EMAIL=ui@example.com PATH="$HOME/bin:$PATH"
 drive a >/dev/null
 unset CCEX_TEST_EMAIL
 t  "a adds an account from the view" "ui@example.com"           "$CCEX" ls
-t  "and names its slot after it"     "ui"                       "$CCEX" ls
+t  "and names its slot after it"     '"name": "ui"'             "$CCEX" ls --json
 
 teardown; setup                 # add, then switch to what was added, in one view
 stub_claude
 export CCEX_TEST_EMAIL=fresh@example.com PATH="$HOME/bin:$PATH"
 drove=$(drive a 4y)
 unset CCEX_TEST_EMAIL
-matches "a new account gets a number" " 4 [^ ]*fresh@example\.com" echo "$drove"
+matches "a new account gets a number" " 4 +in +- +fresh@example\.com" \
+  bash -c 'printf "%s" "$1" | sed "s/\x1b\[[0-9;]*m//g"' _ "$drove"    # cells are coloured
 t  "and switching to it works"       "fresh@example.com"        live_email
 
 teardown; setup
