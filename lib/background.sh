@@ -2,8 +2,9 @@
 # and a foreground view of what it does.
 
 bg_running() {   # is anything already rotating in the background: the daemon, or an old timer
-  systemctl --user is-active ccex-rotate.service >/dev/null 2>&1 ||
-    systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1
+  svc_active ccex-rotate && return 0
+  [ "$OS" = Darwin ] && return 1
+  systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1
 }
 
 monitor() {
@@ -60,7 +61,13 @@ monitor() {
         esac
       }
       local stamp
-      stamp() { find "$CCEX_LIB" "$CCEX_BIN" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1; }
+      stamp() {   # newest mtime under the checkout; BSD stat and GNU find disagree on how to ask
+        if [ "$OS" = Darwin ]; then
+          find "$CCEX_LIB" "$CCEX_BIN" -type f -exec stat -f '%m' {} + 2>/dev/null | sort -rn | head -1
+        else
+          find "$CCEX_LIB" "$CCEX_BIN" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1
+        fi
+      }
       trap 'printf "\n"; exit 0' INT
       [ -t 0 ] && printf 'ccex: keys: 1-6 set interval (%s), r refresh now, q quit\n' "${presets[*]}"
       printf 'ccex: watching every %s, threshold %s%%%s\n' "$every" "$at" \
@@ -98,58 +105,51 @@ monitor() {
         --refresh "$rsec" ${verify[@]+"${verify[@]}"}
       ;;
     install)
-      if [ -f "$UNIT/ccex-rotate.timer" ]; then     # from when this woke up instead of watching
+      if [ "$OS" != Darwin ] && [ -f "$UNIT/ccex-rotate.timer" ]; then   # from when this woke up instead of watching
         systemctl --user disable --now ccex-rotate.timer >/dev/null 2>&1 || true
         rm -f "$UNIT/ccex-rotate.timer"
         printf 'ccex: replaced the old wake-up timer with a resident watcher\n' >&2
       fi
-      unit_install ccex-rotate <<UNITEOF
-[Unit]
-Description=ccex: move off a Claude account that is out of room, as soon as it is
-StartLimitIntervalSec=0
-
-[Service]
-Type=simple
-Restart=always
-RestartSec=10
-Nice=5
-$(unit_env)
-ExecStart=$CCEX_BIN rotate --serve --at $at --every $every --refresh $refresh${verify[0]+ ${verify[0]}}
-
-[Install]
-WantedBy=default.target
-UNITEOF
+      svc_install ccex-rotate \
+        "ccex: move off a Claude account that is out of room, as soon as it is" \
+        "$CCEX_BIN" rotate --serve --at "$at" --every "$every" --refresh "$refresh" \
+        ${verify[0]+"${verify[0]}"}
       printf 'ccex: rotating at %s%% the moment a session reports it, checked every %s; logs in %s\n' \
         "$at" "$every" "$ROOT/.usage/rotate.log"
       [ "$rsec" = 0 ] || \
         printf 'ccex: and one real check when nothing has reported for %s\n' "$refresh"
-      [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" = yes ] || \
-        printf 'ccex: it runs while you are logged in; `loginctl enable-linger %s` to keep it running otherwise\n' "$USER" >&2
+      if [ "$OS" = Darwin ]; then
+        # A launchd agent in the GUI session runs while you are logged in and stops when you
+        # log out, which is the same bargain systemd makes without linger.
+        printf 'ccex: it runs while you are logged in, and starts again when you log back in\n' >&2
+      else
+        [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" = yes ] || \
+          printf 'ccex: it runs while you are logged in; `loginctl enable-linger %s` to keep it running otherwise\n' "$USER" >&2
+      fi
       ;;
     stop)
-      systemctl --user disable --now ccex-rotate.timer 2>/dev/null || true   # the old clock, if any
-      rm -f "$UNIT/ccex-rotate.timer" "$ROOT/.usage/daemon.json"
-      unit_remove ccex-rotate
+      if [ "$OS" != Darwin ]; then
+        systemctl --user disable --now ccex-rotate.timer 2>/dev/null || true   # the old clock, if any
+        rm -f "$UNIT/ccex-rotate.timer"
+      fi
+      rm -f "$ROOT/.usage/daemon.json"
+      svc_remove ccex-rotate
       printf 'ccex: background rotation removed; `ccex rotate --bg` puts it back\n'
       ;;
     status)
-      if systemctl --user is-active ccex-rotate.service >/dev/null 2>&1; then
-        local k v state= since= mem= cpu=
-        while IFS='=' read -r k v; do          # what it costs to leave running, in its own words
-          case $k in
-            ActiveState) state=$v ;; ExecMainStartTimestamp) since=$v ;;
-            MemoryCurrent) mem=$v ;; CPUUsageNSec) cpu=$v ;;
-          esac
-        done < <(systemctl --user show ccex-rotate.service \
-                   -p ActiveState -p ExecMainStartTimestamp -p MemoryCurrent -p CPUUsageNSec)
+      if svc_active ccex-rotate; then
+        local state= since= mem= cpu= cmd=
+        # What it costs to leave running, in the words of whatever is running it.
+        IFS=$'\t' read -r state since mem cpu < <(svc_stats ccex-rotate)
         printf 'ccex: rotating on data change (%s since %s)\n' "$state" "${since:-?}"
         case "$mem$cpu" in
           *[!0-9]*|'') ;;
           *) printf 'ccex: %s MB resident, %s.%ss of cpu used so far\n' \
                "$((mem / 1048576))" "$((cpu / 1000000000))" "$(((cpu / 100000000) % 10))" ;;
         esac
-        sed -n 's/^ExecStart=[^ ]* /ccex: /p' "$UNIT/ccex-rotate.service"
-      elif systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1; then
+        cmd=$(svc_cmdline ccex-rotate)
+        [ -z "$cmd" ] || printf 'ccex: %s\n' "${cmd#* }"
+      elif [ "$OS" != Darwin ] && systemctl --user is-active ccex-rotate.timer >/dev/null 2>&1; then
         printf 'ccex: an older wake-up timer is still doing this; `ccex rotate --bg` replaces it\n'
         systemctl --user list-timers ccex-rotate.timer --no-pager | sed -n 2p
       else

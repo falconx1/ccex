@@ -5,6 +5,8 @@ the live account and the parked ones live.
 """
 import datetime, json, os, re, time
 
+import creds
+
 BASE = os.environ.get("CCEX_BASE") or os.path.expanduser("~/.claude")
 ROOT = os.environ.get("CCEX_ROOT") or os.path.expanduser("~/.claude-profiles")
 USAGE_DIR = os.path.join(ROOT, ".usage")
@@ -128,8 +130,42 @@ def email_for(d):
     return (fresh(cfg_for(d), CFG_KEYS).get("oauthAccount") or {}).get("emailAddress") or ""
 
 
+def uses_config_dir(d):
+    """Whether claude runs this slot with CLAUDE_CONFIG_DIR set.
+
+    It is what the name of a keychain item turns on, and `cfg_for` has already decided it
+    one line up -- asking it rather than deciding again is what keeps the two from drifting.
+    """
+    return cfg_for(d) == os.path.join(d, ".claude.json")
+
+
+# The one place the store is chosen. Everything else asks the store, not the platform:
+# `use.py` moves a login without knowing whether it is a file or a keychain item, and a
+# third system would be a third class in creds.py and no change here beyond this line.
+STORE = (creds.KeychainStore(uses_config_dir, save) if creds.pick() == "keychain"
+         else creds.FileStore(creds_for, fresh, save))
+cred_load, cred_save, cred_has = STORE.load, STORE.save, STORE.has
+cred_where, cred_backup = STORE.where, STORE.backup
+
+
+def cred_move(src, dst):
+    """Carry a login to a slot whose directory moved under it.
+
+    `ccex add` with no name logs in inside a scratch directory and renames it once the
+    account says who it is, and an item keyed by the old path would be stranded there. On
+    files the login moved with the rename, so there is nothing left at the old path to
+    carry -- which is exactly what this then does: nothing.
+    """
+    doc = cred_load(src)
+    if not doc.get("claudeAiOauth"):
+        return False
+    cred_save(dst, doc)
+    cred_save(src, {})
+    return True
+
+
 def logged_in(d):
-    return "claudeAiOauth" in fresh(creds_for(d))
+    return cred_has(d)
 
 
 def refresh_at(d):
@@ -140,7 +176,7 @@ def refresh_at(d):
     down: an account whose refresh token expires while it is parked is one you will find out
     about when rotation reaches for it.
     """
-    v = (fresh(creds_for(d)).get("claudeAiOauth") or {}).get("refreshTokenExpiresAt")
+    v = (cred_load(d).get("claudeAiOauth") or {}).get("refreshTokenExpiresAt")
     return v / 1000 if v else None
 
 
