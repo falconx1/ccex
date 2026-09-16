@@ -4,53 +4,66 @@ BASE="$HOME/.claude"
 ROOT="${CC_PROFILE_ROOT:-$HOME/.claude-profiles}"
 SHARED_FILES=(settings.json CLAUDE.md)
 SHARED_DIRS=(plugins projects todos tasks file-history)
-UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+OS=$(uname -s 2>/dev/null || printf 'unknown')
 
 export CCEX_BASE="$BASE" CCEX_ROOT="$ROOT"
 export PYTHONPATH="$CCEX_PY${PYTHONPATH:+:$PYTHONPATH}"
 
 die() { printf 'ccex: %s\n' "$*" >&2; exit 1; }
 
-py() { python3 "$CCEX_PY/$1.py" "${@:2}"; }
+py() {   # shift rather than "${@:2}": bash 3.2, which macOS ships, joins that slice into
+  # one word whenever IFS has been changed -- as it is around every `read -r a b < <(py ...)`
+  local m=$1; shift
+  python3 "$CCEX_PY/$m.py" "$@"
+}
 
-with_lock() {   # the daemon and an interactive switch must not interleave
-  if [ -n "${CCEX_LOCK_HELD:-}" ] || ! command -v flock >/dev/null 2>&1; then "$@"; return; fi
+# Two accounts cannot change hands at once: the daemon and an interactive `ccex use` must
+# not interleave. `with_lock` is the rule -- once held, held -- and `hold_lock` is whichever
+# mechanism this machine has for it, chosen here rather than on every call.
+
+if command -v flock >/dev/null 2>&1; then
+
+  hold_lock() {
+    # A subshell, so the descriptor closes with it: a loop that switches twice must not still
+    # be holding the lock from the first time. flock is per descriptor, so a nested call would
+    # wait on a lock this process already has -- CCEX_LOCK_HELD is what makes it a no-op.
+    ( export CCEX_LOCK_HELD=1
+      # Long enough to sit out a switch that asks the accounts it is moving to first: three of
+      # them, a session each, and a session that will not answer waits out its own timeout.
+      # Waiting beats failing, because what is being waited for is the switch this command
+      # wanted anyway.
+      flock -w "${CCEX_LOCK_WAIT:-180}" 9 || \
+        die "another ccex is switching accounts; try again in a moment"
+      "$@" ) 9>"$ROOT/.lock"
+  }
+
+else
+
+  hold_lock() {   # macOS ships without flock. A directory is the mutex instead: mkdir is
+    # atomic wherever there is a filesystem, and the pid written inside it is how a lock left
+    # behind by a killed switch is told from one a live switch is still holding.
+    local d="$ROOT/.lock.d" waited=0 owner= rc=0
+    until mkdir "$d" 2>/dev/null; do
+      owner=$(cat "$d/pid" 2>/dev/null) || owner=
+      if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+        rm -rf "$d"; continue
+      fi
+      [ "$waited" -lt "${CCEX_LOCK_WAIT:-180}" ] || \
+        die "another ccex is switching accounts; try again in a moment"
+      sleep 1; waited=$((waited + 1))
+    done
+    printf '%s\n' "$$" > "$d/pid"
+    ( export CCEX_LOCK_HELD=1; "$@" ) || rc=$?
+    rm -rf "$d"
+    return "$rc"
+  }
+
+fi
+
+with_lock() {
+  if [ -n "${CCEX_LOCK_HELD:-}" ]; then "$@"; return; fi
   mkdir -p "$ROOT"
-  # A subshell, so the descriptor closes with it: a loop that switches twice must not still
-  # be holding the lock from the first time. flock is per descriptor, so a nested call would
-  # wait on a lock this process already has -- CCEX_LOCK_HELD is what makes it a no-op.
-  ( export CCEX_LOCK_HELD=1
-    # Long enough to sit out a switch that asks the accounts it is moving to first: three of
-    # them, a session each, and a session that will not answer waits out its own timeout.
-    # Waiting beats failing, because what is being waited for is the switch this command
-    # wanted anyway.
-    flock -w "${CCEX_LOCK_WAIT:-180}" 9 || \
-      die "another ccex is switching accounts; try again in a moment"
-    "$@" ) 9>"$ROOT/.lock"
-}
-
-unit_install() {   # unit_install <name>, with the unit body on stdin: write it, then run it
-  mkdir -p "$UNIT"
-  cat > "$UNIT/$1.service"
-  systemctl --user daemon-reload
-  systemctl --user reenable "$1.service" >/dev/null 2>&1 || \
-    systemctl --user enable "$1.service" >/dev/null 2>&1
-  systemctl --user restart "$1.service"
-}
-
-unit_remove() {
-  systemctl --user disable --now "$1.service" 2>/dev/null || true
-  rm -f "$UNIT/$1.service"
-  systemctl --user daemon-reload
-}
-
-unit_env() {   # what every ccex unit needs in its environment: `claude` on PATH, because a
-  # switch may ask an account what it has left, and the profile root if this ccex was told one.
-  # Command substitution eats the trailing newline, so this goes on a line of its own in a unit
-  local c=
-  c=$(command -v claude 2>/dev/null) && c="$(dirname "$c"):" || c=
-  printf 'Environment=PATH=%s%%h/.local/bin:/usr/local/bin:/usr/bin:/bin\n' "$c"
-  [ -z "${CC_PROFILE_ROOT:-}" ] || printf 'Environment=CC_PROFILE_ROOT=%s\n' "$CC_PROFILE_ROOT"
+  hold_lock "$@"
 }
 
 dir_for() {
@@ -62,12 +75,9 @@ dir_for() {
 }
 
 profiles() {   # the live account, then every parked slot that still holds a login
-  printf 'default\n'
-  [ -d "$ROOT" ] || return 0
-  local p
-  for p in "$ROOT"/*/; do
-    [ -d "$p" ] && grep -qs claudeAiOauth "$p/.credentials.json" && basename "$p"
-  done
+  # Asked of the python side because what counts as a login is not always a file: on macOS
+  # it is a keychain item, and there is nothing in the directory to grep for.
+  py slots
 }
 
 info() { py info "$1"; }

@@ -247,16 +247,23 @@ class View:
         nothing is using, so the numbers come from the daemon itself.
         """
         out = dict(NO_UNIT)
-        try:
-            out["active"] = subprocess.run(
-                ["systemctl", "--user", "is-active", "ccex-rotate.service"],
-                capture_output=True, timeout=5).returncode == 0
-            if not out["active"]:      # an older ccex left a wake-up timer; it still rotates
-                out["legacy"] = subprocess.run(
-                    ["systemctl", "--user", "is-active", "ccex-rotate.timer"],
+        if sys.platform == "darwin":       # a launchd agent, where Linux has a unit
+            try:
+                import launchd
+                out["active"] = launchd.active("ccex-rotate")
+            except Exception:
+                return out
+        else:
+            try:
+                out["active"] = subprocess.run(
+                    ["systemctl", "--user", "is-active", "ccex-rotate.service"],
                     capture_output=True, timeout=5).returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            return out
+                if not out["active"]:  # an older ccex left a wake-up timer; it still rotates
+                    out["legacy"] = subprocess.run(
+                        ["systemctl", "--user", "is-active", "ccex-rotate.timer"],
+                        capture_output=True, timeout=5).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                return out
         if out["active"]:
             # `ccex rotate --bg` writes down what it installed, so this reads a number
             # rather than re-parsing the command line it was installed with.

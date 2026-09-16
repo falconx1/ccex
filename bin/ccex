@@ -11,7 +11,7 @@ export CCEX_BIN="$SELF"
 [ -d "$CCEX_PY" ] || { printf 'ccex: cannot find its lib/ next to %s\n' "$SELF" >&2; exit 1; }
 
 # shellcheck source=../lib/common.sh
-for m in common profile limits rotate background tray; do . "$CCEX_LIB/$m.sh"; done
+for m in common service profile limits rotate background tray; do . "$CCEX_LIB/$m.sh"; done
 
 usage() {   # `ccex -h` for the overview, `ccex <command> -h` for one command
   case "${1:-}" in
@@ -86,7 +86,9 @@ is the quickest.
 Sessions you already have open follow the switch.
 
 The account you name is asked what it has left before the slot moves -- the same reading
-rotation takes, through the same code, into the same trail the live view shows. If it comes
+rotation takes, through the same code, into the same trail the live view shows. That takes a
+session on it, seconds usually and up to 50 at worst, and it says so while it waits;
+--no-check skips it. If it comes
 back spent, the slot goes to the next account with room instead and says so: naming an
 account is not an instruction to sit at 93% while the daemon moves off it seconds later.
 `--anyway` is how you say you meant it. The report afterwards reads that same answer, so
@@ -94,12 +96,13 @@ this costs one session, not two.
 U
 ;;
   rotate) cat <<'U'
-ccex rotate [--at 80] [-n] [--bg|--watch|--status|--log|--guesses|--stop]
+ccex rotate [--at 90] [-n] [--bg|--watch|--status|--log|--guesses|--stop]
 
 Switch off the live account if it has crossed --at on the 5-hour or weekly window,
 onto whichever account has the most usable room. With no flag it does that once, now.
 
-  --at N        percentage that counts as out of room (default 80)
+  --at N        percentage that counts as out of room (default 90; the week
+                keeps its own 99, which is what `ccex pool cap` overrides)
   -n            plan only, write nothing
   --no-verify   switch on the numbers already on file, without asking the account first
 
@@ -152,8 +155,9 @@ picks it is working from numbers worth trusting. That happens at most once per 5
 and a read that failed counts, so it cannot turn into a tick-by-tick check.
 
 Deciding never starts a session: it reads what your running sessions already report, and
-nothing but files. It runs while you are logged in; `loginctl enable-linger $USER` to keep
-it running when you are not.
+nothing but files. It runs while you are logged in; on Linux `loginctl enable-linger $USER`
+keeps it running when you are not, and on macOS it is a launchd agent in your own session,
+which comes back when you log back in.
 U
 ;;
     record) cat <<'U'
@@ -225,6 +229,8 @@ ccex tray [--install|--stop|--status]
 
 ccex in the top bar: the live account and what it has left as the panel label, every other
 account one click below it, and the switch happens where you are rather than in a terminal.
+Linux only -- it draws an AppIndicator, and macOS has nothing that speaks it; there,
+`ccex ls -w` is the same table live in a terminal.
 
   --install   start it now and at every login
   --stop      take it out of the top bar again
@@ -297,7 +303,7 @@ ccex — switch which Claude account Claude Code runs as
   ccex ls [<account>]         every account, or one in full; * marks the live one
   ccex ls -w                  that table live, counting down, with the next switch on it
   ccex use <account>          make that account live (-n to plan only)
-  ccex rotate                 switch off the live account if it is out of room (--at 80)
+  ccex rotate                 switch off the live account if it is out of room (--at 90)
   ccex rotate --bg            keep doing that in the background, the moment usage says so
   ccex pool out|in <account>  take an account out of the rotation pool, or put it back
   ccex pool cap <account>     how far rotation may spend that one account (--5h, --weekly)
@@ -362,12 +368,15 @@ case "$cmd" in
     esac
     if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then limits --quiet "$how" "$@"; exit 0; fi
     cur="${CLAUDE_CONFIG_DIR:-$BASE}"
-    declare -A ID FIVE SEVEN WHEN FLAGS CAP
+    # One reading, read twice: once to find out whether anything is capped, once to draw.
+    # It is held in a variable rather than an associative array because macOS ships bash 3.2,
+    # which has none -- and the rows already arrive one per account, in the order they print.
+    rows=$(limits --all --tsv "$how")
     capcol=0
     while IFS=$'\t' read -r n i f s w g c; do
-      ID[$n]=$i; FIVE[$n]=$f; SEVEN[$n]=$s; WHEN[$n]=$w; FLAGS[$n]=$g; CAP[$n]=$c
+      [ -n "$n" ] || continue
       [ "$c" != - ] && capcol=1        # nobody has capped anything: no column, same row as before
-    done < <(limits --all --tsv "$how")
+    done <<<"$rows"
     hdr='%-3s %-2s%-18s %-30s %-7s %-7s %-8s %-22s %-26s '
     fmt='%-3s %-2s%-18s %-30s %-7s %-7s %-8s %s %s '
     [ "$capcol" = 1 ] && { hdr+='%-7s '; fmt+='%-7s '; }
@@ -376,21 +385,21 @@ case "$cmd" in
     # shellcheck disable=SC2059
     printf "$hdr" '#' '' ACCOUNT EMAIL TIER TOKEN REFRESH 5H WEEKLY \
       ${capname[@]+"${capname[@]}"} CHECKED
-    while read -r p; do
+    while IFS=$'\t' read -r p i f s w g c; do
+      [ -n "$p" ] || continue
       d=$(dir_for "$p")
       mark=' '; [ "$(readlink -f "$d" 2>/dev/null)" = "$(readlink -f "$cur" 2>/dev/null)" ] && mark='*'
-      case ",${FLAGS[$p]:-}," in                 # held wins: a cap is moot on an account
+      case ",$g," in                             # held wins: a cap is moot on an account
         *,held,*) mark="${mark% }x" ;;            # out of the pool, by your hand or rotation's
         *,cap,*)  mark="${mark% }c" ;;
       esac
       IFS=$'\t' read -r email tier state rstate < <(info "$d")
-      row=("${ID[$p]:--}" "$mark" "$p" "$email" "$tier" "$state" "$rstate" \
-           "${FIVE[$p]:--}" "${SEVEN[$p]:--}")
-      [ "$capcol" = 1 ] && row+=("${CAP[$p]:--}")
-      row+=("${WHEN[$p]:--}")
+      row=("$i" "$mark" "$p" "$email" "$tier" "$state" "$rstate" "$f" "$s")
+      [ "$capcol" = 1 ] && row+=("$c")
+      row+=("$w")
       # shellcheck disable=SC2059
       printf "$fmt" "${row[@]}"
-    done < <(profiles) | sort -n        # by id, so the numbers you type read in order
+    done <<<"$rows" | sort -n            # by id, so the numbers you type read in order
     ;;
   add)
     # A name is optional: the account knows its own, we just cannot ask until it has
@@ -423,12 +432,14 @@ case "$cmd" in
         printf 'ccex: %s is the account you are already running; nothing to park\n' "$email"
       elif [ -n "$known" ]; then
         rm -rf "$ROOT/$known" && mv "$scratch" "$ROOT/$known"
+        py rekey "$scratch" "$ROOT/$known"    # the login is keyed by directory on macOS
         printf 'ccex: re-authenticated %s (%s)\n' "$email" "$known"
       else
         slot=$(python3 -c 'import sys, ccexlib; print(ccexlib.canon(sys.argv[1]))' "$email")
         target="$ROOT/$slot"; n=2
         while [ -e "$target" ]; do target="$ROOT/$slot-$n"; n=$((n + 1)); done
         mv "$scratch" "$target"
+        py rekey "$scratch" "$target"         # the login is keyed by directory on macOS
         printf 'ccex: added %s, parked as %s\n' "$email" "$(basename "$target")"
       fi
     fi

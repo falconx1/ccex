@@ -1,13 +1,13 @@
 """One `ccex ls` row: who the account is, and how long its two OAuth clocks have left."""
 import re, sys, time
 
-from ccexlib import cfg_for, creds_for, load
+from ccexlib import cfg_for, cred_load, load
 
 d = sys.argv[1]
 account = load(cfg_for(d)).get("oauthAccount") or {}
 email = account.get("emailAddress") or ""
 tier = re.sub(r"^(default_)?claude_", "", account.get("userRateLimitTier") or "")
-oauth = load(creds_for(d)).get("claudeAiOauth") or {}
+oauth = cred_load(d).get("claudeAiOauth") or {}
 exp, rexp = oauth.get("expiresAt"), oauth.get("refreshTokenExpiresAt")
 rleft = rexp / 1000 - time.time() if rexp else None
 if not exp:

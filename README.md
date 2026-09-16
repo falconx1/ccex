@@ -30,7 +30,8 @@ git clone https://github.com/falconx1/ccex.git ~/src/ccex
 
 That symlinks `~/.local/bin/ccex` to the checkout, so `git pull` is the whole update
 story. Pass a different directory to install elsewhere: `install.sh ~/bin`. Keep the
-checkout where it is — the symlink and the systemd unit both point at it.
+checkout where it is — the symlink and the background service (a systemd unit on Linux, a
+launchd agent on macOS) both point at it.
 
 Then, once:
 
@@ -43,7 +44,9 @@ every usage number current without ever starting a session to ask. It keeps the 
 you already have and pipes into it; if you don't have one, it installs the bundled bar.
 [More below.](#live-numbers-from-your-statusline)
 
-Needs `bash`, `python3`, and the `claude` CLI on your PATH.
+Needs `bash`, `python3`, and the `claude` CLI on your PATH. Linux and macOS both;
+the bash macOS ships (3.2) is enough, so there is nothing to install first.
+[What differs on macOS.](#on-macos)
 
 ## Everyday
 
@@ -415,7 +418,8 @@ last check:
   ccex: staying put - ada@example.com is at 62% 5h / 23% weekly, under its own 80% 5h / 90% weekly
 ```
 
-`--bg` installs a systemd user service that stays up and re-reads the numbers every
+`--bg` installs a resident service — a systemd user unit, or a launchd agent on macOS —
+that stays up and re-reads the numbers every
 `--every` (10s). Every statusline render writes a snapshot; the moment one of those crosses
 the threshold, the switch happens — seconds after the number lands, not at the next tick of
 a five-minute clock. `--status` says whether it is running and what it has cost, `--log`
@@ -756,7 +760,8 @@ ccex: in the top bar now, and at every login (ccex tray --stop removes it)
 ```
 
 An indicator next to the clock: the live account and how much of its 5-hour window is
-gone, and under it `ccex ls` with the columns a menu has room for.
+gone, and under it `ccex ls` with the columns a menu has room for. Linux only — on macOS
+`ccex ls -w` is the same table, live, in a terminal.
 
 ```
 ●   dev-team008          5h  83% ████████▒░ 3h28m   ·  wk  37% ████▒▒▒▒▒▒ 1d 15h58m
@@ -858,8 +863,9 @@ Both values are read straight out of `.credentials.json` (`expiresAt` and
 The live account is just the ordinary `~/.claude`. Everything else is parked under
 `~/.claude-profiles/<name>/`.
 
-`ccex use` moves exactly one key — `claudeAiOauth` in `.credentials.json` — plus the
-matching `oauthAccount` / `userID` identity block and the account's cached usage numbers
+`ccex use` moves exactly one key — `claudeAiOauth`, from wherever this machine keeps a
+login: `.credentials.json` on Linux, the login Keychain on macOS — plus the matching
+`oauthAccount` / `userID` identity block and the account's cached usage numbers
 in `.claude.json`. The account that was
 live gets parked under its own email's local part; the one you named becomes live. Nothing
 else is touched.
@@ -869,28 +875,70 @@ Parked slots symlink `settings.json`, `CLAUDE.md`, `plugins/`, `projects/`, `tod
 configuration and history as your main account rather than a blank one.
 
 Every write first copies the four files it's about to touch into
-`~/.claude-profiles/.backups/<timestamp>/`, so any switch is undoable by hand.
+`~/.claude-profiles/.backups/<timestamp>/`, so any switch is undoable by hand. Where the
+logins are not files, what is written there is which keychain item ended up holding which
+account — the same rollback, without putting two tokens on disk that were not there before.
 
-Sessions you already have open follow the switch. Claude Code re-reads
-`.credentials.json`, so a session started an hour ago bills the account that is live now,
+Sessions you already have open follow the switch. Claude Code re-reads the credential,
+so a session started an hour ago bills the account that is live now,
 not the one it started on — which is what makes rotating away from a spent account
 actually help the work you're in the middle of.
 
+## On macOS
+
+Everything above is the same; three things underneath it are not.
+
+**The login is not a file.** Claude Code on macOS keeps it in the login Keychain and treats
+`.credentials.json` as a fallback the keychain overrides — so a switch that moved files
+would move nothing at all. There is one item per config directory:
+
+```
+Claude Code-credentials                    the slot claude runs with CLAUDE_CONFIG_DIR unset
+Claude Code-credentials-<8 hex of sha256>  every other, hashed from that directory's path
+```
+
+which is what already makes a parked profile its own login rather than a second name for
+the live one. `ccex` reads and writes those items through `security`, hex through stdin,
+the same shape Claude Code writes them in — so the item it leaves behind is the item
+`claude` would have written, and no token is ever passed on a command line. Nothing
+prompts: both sides reach the keychain through the same `/usr/bin/security`, which is the
+application the items trust. `CCEX_CRED_STORE=file` forces the Linux layout if you want it.
+
+Because the item is keyed by the directory, `ccex add` with no name — which logs in inside
+a scratch directory and renames it once the account says who it is — carries the login over
+to the new name rather than leaving it behind under the old one.
+
+**The background rotator is a launchd agent.** `ccex rotate --bg` writes
+`~/Library/LaunchAgents/com.ccex.ccex-rotate.plist` and bootstraps it into `gui/<uid>`,
+which is the session with the keychain unlocked; `--status`, `--log` and `--stop` read and
+remove exactly what they do on Linux. It runs while you are logged in and comes back when
+you log back in.
+
+**The top bar is Linux only.** `ccex tray` draws an AppIndicator, and nothing on macOS
+speaks that. `ccex ls -w` is the same table, live, in a terminal — the rotation monitor,
+the countdowns and the switch keys included.
+
+Two smaller ones: sessions running on an account are found with `ps -E` rather than by
+reading `/proc`, and switches take a directory as their mutex where there is no `flock`.
+
 ## Caveats
 
-- Credentials stay in plain files, exactly as Claude Code already stores them. `ccex` sets
-  mode `600` on everything it writes, but it doesn't add encryption that wasn't there.
+- Credentials stay exactly where Claude Code already keeps them: plain files on Linux,
+  the login Keychain on macOS. `ccex` sets mode `600` on every file it writes, but it
+  doesn't add encryption that wasn't there, and it doesn't take any away either.
 - Switches take an `flock` so the background daemon and an interactive `ccex use` can't
   interleave. Claude Code itself doesn't take that lock, so a switch landing in the same
   millisecond as one of its own writes to `~/.claude.json` could still lose that write. The
   window is sub-millisecond and the file is rewritten from a read taken immediately before,
-  but it isn't zero.
+  but it isn't zero. Where there is no `flock` — macOS — the lock is a directory, and a
+  lock left behind by a killed switch is told from a live one by the pid inside it.
 - The last 20 switch backups are kept and the rotation log is capped at 200 lines.
-- Detecting whether a session is already open on an account reads `/proc`, so it's
-  Linux-only. Elsewhere `ccex` just falls through to the next source.
-- Only tested on Linux with the credentials-in-`~/.claude/.credentials.json` layout. On
-  macOS, where Claude Code can keep the login in the system Keychain instead, `ccex ls`
-  will show `NOT LOGGED IN` for accounts it can't see.
+- Detecting whether a session is already open on an account reads `/proc` on Linux and
+  `ps -E` on macOS. Anywhere else `ccex` just falls through to the next source.
+- Tested on Linux with the credentials-in-`~/.claude/.credentials.json` layout, and on
+  macOS with the login in the Keychain. Both stores are covered by the suite; the keychain
+  one only runs on macOS, where there is a keychain to run it against.
+- The top bar is Linux only: see [On macOS](#on-macos).
 - Respect Anthropic's terms for the accounts you're switching between.
 
 ## Tests
@@ -899,7 +947,7 @@ actually help the work you're in the middle of.
 ./test/run.sh
 ```
 
-140 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
+328 checks against a throwaway `HOME` with three fake accounts — listing, numbering,
 switching by name and number, exit codes, the pool, per-account caps, the week's own 99%
 and the hold it triggers, rotation decisions, the statusline install, rendered frames
 of the live view (including the switch prompt and two-digit account numbers) and the
@@ -909,16 +957,25 @@ the keys driven through a real pty — all four arrows, enter, `a` and `c` — a
 with and without a name, capping and holding from the view, help for every command, and that parking never overwrites another account's login.
 No network, no real `claude` binary, nothing written outside a temp directory.
 
+On macOS a further seventeen run the whole thing again against the login Keychain: which
+item each slot's login belongs in, that no two slots share one, that a login with no file
+behind it is still an account, that `use` moves it from item to item, that `add` carries
+one to the slot it names, and that `rm` takes it away. Those write real keychain items,
+under a service name belonging to that run (`ccex-test-<pid>`), and delete them again at
+the end — the store is the thing under test, so faking it would only test the fake.
+
 ## Layout
 
 ```
 bin/ccex              argument dispatch and the help text, nothing else
-lib/common.sh         where the accounts live, plus die / dir_for / profiles / py
+lib/common.sh         where the accounts live, the switch lock, and die / dir_for / profiles / py
+lib/service.sh        the resident service, in systemd's words or launchd's
 lib/profile.sh        symlinking a profile to your real config, and making an account live
 lib/limits.sh         the limits command, and the statusline recorder's throttle
 lib/rotate.sh         turning a decision into a switch
-lib/background.sh     the systemd service, the foreground watch, and one tick
+lib/background.sh     `rotate --bg|--watch|--status|--log|--stop`, and one tick
 lib/tray.sh           finding the desktop's indicator support, and the login service
+lib/py/creds.py       where a login lives: the file store, the keychain store, one choice
 lib/py/ccexlib.py     paths, JSON read/write, slots, numbers, the pool -- imported by the rest
 lib/py/use.py         the credential handover, the one place accounts move
 lib/py/usage.py       reading the two windows: session, cache, clock -- no launching
@@ -934,7 +991,10 @@ lib/py/statusline.py  the one-time statusLine edit in settings.json
 lib/py/info.py        one `ccex ls` row
 lib/py/seed.py        onboarding and trust for a fresh profile
 lib/py/pool.py        holding an account out of rotation, and capping how far it is spent
-lib/py/forget.py      releasing a number, pool entry and cap when an account is removed
+lib/py/forget.py      releasing a number, pool entry, cap and login when an account is removed
+lib/py/launchd.py     the macOS half of `--bg`: the agent, and what it is doing
+lib/py/slots.py       the accounts with a login, for the bash side to loop over
+lib/py/rekey.py       carrying a login to a slot that was renamed under it
 share/statusline.sh   the bundled statusline, installed when you have none
 share/ccex-symbolic.svg  the panel icon
 test/run.sh           the suite above

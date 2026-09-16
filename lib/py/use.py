@@ -2,8 +2,10 @@
 import os, shutil, sys, time
 
 import burn
-from ccexlib import (BASE, ROOT, canon, cfg_for, creds_for, email_for, expand, held,
-                     id_for, load, logged_in, note_switch, running_at, save, seed_into, step)
+import creds
+from ccexlib import (BASE, ROOT, canon, cfg_for, cred_backup, cred_load, cred_save, creds_for,
+                     email_for, expand, held, id_for, load, logged_in, note, note_switch,
+                     running_at, save, seed_into, step)
 from decide import FIVE_AT, cap, own, ranked, reads
 from usage import account_json, cached
 
@@ -18,8 +20,20 @@ def slot(d):
     "credential path, config path, email"
     return creds_for(d), cfg_for(d), email_for(d)
 
+
+def write_login(d, doc, doing):
+    """Put a login down, or stop here saying which half of the handover had happened.
+
+    A store cannot know that it is being written to in the middle of a switch; this is the
+    only place that does, so it is the only place that can say so.
+    """
+    try:
+        cred_save(d, doc)
+    except creds.CannotWrite as e:
+        sys.exit("ccex: %s - %s, so nothing further was moved" % (e, doing))
+
 live_cred, live_cfg, live_email = slot(BASE)
-if "claudeAiOauth" not in load(live_cred):
+if not logged_in(BASE):
     sys.exit("ccex: no account is logged in right now; use `ccex add <name>`")
 
 parked = {}
@@ -29,7 +43,7 @@ if os.path.isdir(ROOT):
         if name.startswith(".") or not os.path.isdir(d):
             continue
         cred, cfg, email = slot(d)
-        if "claudeAiOauth" in load(cred):
+        if logged_in(d):
             parked[name] = (d, email)
 
 t = target.lower()
@@ -81,7 +95,7 @@ if asking and not dry:
     # say you meant it.
     from ask import ask
     step(None)                        # this switch's trail is its own
-    step("switching to %s by hand, reading it first" % src_name)
+    note("switching to %s by hand, reading it first" % src_name)
     tried, named = set(), src_name
     while True:
         was = None if row["five"] is None else reads(row)
@@ -115,7 +129,7 @@ if asking and not dry:
             sys.exit("ccex: %s is at %s, %s - and there is nothing else with room, so nothing "
                      "moved (`ccex use %s --anyway` switches to it regardless)"
                      % (src_email, reads(row), why, target))
-        step("%s has no room (%s), reading %s instead" % (src_name, why, nxt["name"]))
+        note("%s has no room (%s), reading %s instead" % (src_name, why, nxt["name"]))
         print("ccex: %s is at %s, %s - handing over to %s instead (`ccex use %s --anyway` "
               "switches to it regardless)"
               % (src_email, reads(row), why, nxt["email"], target), file=sys.stderr)
@@ -151,18 +165,20 @@ os.makedirs(bak, exist_ok=True)
 for stale in sorted(d for d in os.listdir(bak_root) if not d.startswith("."))[:-20]:
     shutil.rmtree(os.path.join(bak_root, stale), ignore_errors=True)   # rotating hourly adds up
 src_cred, src_cfg, _ = slot(src_dir)
-for tag, path in (("live.credentials.json", live_cred), ("live.claude.json", live_cfg),
-                  ("incoming.credentials.json", src_cred), ("incoming.claude.json", src_cfg)):
+for tag, path in (("live.claude.json", live_cfg), ("incoming.claude.json", src_cfg)):
     if os.path.exists(path):
         shutil.copy2(path, os.path.join(bak, tag))
+# And the logins, in whatever form the store they live in can leave behind: the files
+# themselves, or a note of which keychain item ended up holding which account.
+cred_backup(bak, [("live", BASE, live_email), ("incoming", src_dir, src_email),
+                  ("parked", park_dir, live_email)])
 
 os.makedirs(park_dir, exist_ok=True)
-lc, sc = load(live_cred), load(src_cred)
+lc, sc = cred_load(BASE), cred_load(src_dir)
 lcfg, scfg = load(live_cfg), load(src_cfg)
 
-pk_cred = os.path.join(park_dir, ".credentials.json")
 pk_cfg = os.path.join(park_dir, ".claude.json")
-pk = load(pk_cred)
+pk = cred_load(park_dir)
 pk["claudeAiOauth"] = lc["claudeAiOauth"]
 pkcfg = load(pk_cfg)
 for k in IDENTITY:
@@ -173,7 +189,7 @@ for k in IDENTITY:
 # again -- without re-seeding now, a parked account answers "untrusted" and can never be
 # measured. Seeding at park time is the fix; borrow_trust() only patches it at probe time.
 seed_into(pkcfg, lcfg)
-save(pk_cred, pk)
+write_login(park_dir, pk, "parking %s" % (live_email or "the live account"))
 save(pk_cfg, pkcfg)
 
 # What the outgoing account was reading, before its numbers are parked with it.
@@ -188,7 +204,7 @@ for k in IDENTITY:
         lcfg[k] = scfg[k]
     else:
         lcfg.pop(k, None)
-save(live_cred, lc)
+write_login(BASE, lc, "making %s live" % src_email)
 save(live_cfg, lcfg)
 
 # the source slot handed its login over, so it must not keep a copy: one account, one slot
@@ -196,7 +212,7 @@ if os.path.realpath(src_dir) != os.path.realpath(park_dir):
     sc.pop("claudeAiOauth", None)
     for k in IDENTITY:
         scfg.pop(k, None)
-    save(src_cred, sc)
+    write_login(src_dir, sc, "clearing the slot %s came from" % src_email)
     save(src_cfg, scfg)
     keep = [e for e in os.listdir(src_dir)
             if not os.path.islink(os.path.join(src_dir, e))

@@ -30,6 +30,14 @@ tray_needs() {
 
 tray() {
   local sub=${1:-run}
+  if [ "$OS" = Darwin ]; then
+    # AppIndicator is an X11/Wayland panel protocol and there is nothing on macOS that
+    # speaks it. The table it draws is the live view's, so that is where to send people.
+    case "$sub" in
+      status) printf 'ccex: not in the top bar -- the tray is Linux only; `ccex ls -w` is the same table, in a terminal\n'; return 0 ;;
+      *) die "the tray is Linux only (it draws an AppIndicator); `ccex ls -w` is the same table live in a terminal" ;;
+    esac
+  fi
   case "$sub" in
     run)
       exec python3 "$CCEX_PY/tray.py" ;;     # which says the same thing about a missing typelib

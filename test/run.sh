@@ -5,9 +5,25 @@ set -uo pipefail
 
 CCEX=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/bin/ccex
 pass=0 fail=0
+REAL_HOME=$HOME       # kept because HOME is about to become a throwaway directory
+
+# The suite writes its accounts as files, so it asks for the file store however this machine
+# would have stored a login otherwise. The keychain store has a suite of its own below.
+export CCEX_CRED_STORE=file
+
+if ! command -v timeout >/dev/null 2>&1; then
+  timeout() {   # macOS ships without it, and all the suite wants is "run this, then stop it"
+    local secs=$1 pid killer rc=0; shift
+    "$@" & pid=$!
+    ( sleep "$secs"; kill -TERM "$pid" 2>/dev/null ) & killer=$!
+    wait "$pid" 2>/dev/null || rc=$?
+    kill -TERM "$killer" 2>/dev/null
+    return "$rc"
+  }
+fi
 
 setup() {                       # three accounts: a is live, b and c are parked
-  HOME=$(mktemp -d)
+  HOME=$(mktemp -d "${TMPDIR:-/tmp}/ccex-test.XXXXXX")
   export HOME CC_PROFILE_ROOT="$HOME/.claude-profiles"
   python3 - "$HOME" <<'PY'
 import json, os, sys, time
@@ -46,7 +62,9 @@ json.dump({"week": WEEK_AT, "five": FIVE_AT}, open(h + "/resets.json", "w"))
 PY
 }
 
-teardown() { [ -n "${HOME:-}" ] && [ "${HOME#/tmp/}" != "$HOME" ] && rm -rf "$HOME"; }
+teardown() {   # only ever a directory this suite made: the name is the proof of that
+  case "${HOME:-}" in *"/ccex-test."*) rm -rf "$HOME" ;; esac
+}
 
 live_email() { "$CCEX" ls | awk '/\*/ {print $4}'; }
 
@@ -91,6 +109,12 @@ exits() {   # exits <name> <expected code> <command...>
   "$@" >/dev/null 2>&1; local got=$?
   if [ "$got" = "$want" ]; then pass=$((pass + 1)); printf '  ok   %s\n' "$name"
   else fail=$((fail + 1)); printf '  FAIL %s (exit %s, wanted %s)\n' "$name" "$got" "$want"; fi
+}
+
+age_file() {   # age_file <seconds ago> <path>: `touch -d`, without asking for GNU touch
+  python3 -c 'import os, sys, time
+t = time.time() - float(sys.argv[1])
+os.utime(sys.argv[2], (t, t))' "$1" "$2"
 }
 
 matches() {   # matches <name> <regex> <command...>
@@ -230,11 +254,11 @@ stub_claude() {   # a `claude auth login` that succeeds, as whoever CCEX_TEST_EM
 #!/usr/bin/env bash
 python3 - "$CLAUDE_CONFIG_DIR" "$CCEX_TEST_EMAIL" <<'PYEOF'
 import json, os, sys, time
+from ccexlib import cred_save          # through the store, like the thing it stands in for
 d, email = sys.argv[1], sys.argv[2]
-json.dump({"claudeAiOauth": {"accessToken": "t-" + email, "refreshToken": "r-" + email,
-           "expiresAt": int(time.time() + 3600) * 1000,
-           "refreshTokenExpiresAt": int(time.time() + 30 * 86400) * 1000}},
-          open(d + "/.credentials.json", "w"))
+cred_save(d, {"claudeAiOauth": {"accessToken": "t-" + email, "refreshToken": "r-" + email,
+              "expiresAt": int(time.time() + 3600) * 1000,
+              "refreshTokenExpiresAt": int(time.time() + 30 * 86400) * 1000}})
 p = d + "/.claude.json"
 cfg = json.load(open(p)) if os.path.exists(p) else {}
 cfg["oauthAccount"] = {"emailAddress": email, "accountUuid": email,
@@ -1270,14 +1294,31 @@ absent "and left puts it back"      "a@example.com"            cat "$CC_PROFILE_
 
 teardown; setup
 mkdir -p "$CC_PROFILE_ROOT/.usage"
+stub_daemon() {   # a service manager that says the rotator is up, so the footer is the
+  # suite's to assert rather than a property of whoever's machine is running it
+  mkdir -p "$HOME/fakebin"
+  cat > "$HOME/fakebin/systemctl" <<'FAKE'
+#!/usr/bin/env bash
+case " $* " in *" is-active "*) case " $* " in *ccex-rotate.service*) exit 0 ;; esac; exit 3 ;; esac
+exit 0
+FAKE
+  cat > "$HOME/fakebin/launchctl" <<'FAKE'
+#!/usr/bin/env bash
+case "${1:-}" in print) printf '\tstate = running\n\tpid = 1\n'; exit 0 ;; esac
+exit 0
+FAKE
+  chmod +x "$HOME/fakebin/systemctl" "$HOME/fakebin/launchctl"
+}
+stub_daemon
 cat > "$CC_PROFILE_ROOT/.usage/daemon.json" <<'DJ'
 {"at": 99, "every": "10s", "refresh": 0, "since": "2026-08-27 16:00:00"}
 DJ
 : > "$CC_PROFILE_ROOT/.usage/.beat"
-t  "the next read is counted down"  "next read in"   frame 99
-touch -d '30 seconds ago' "$CC_PROFILE_ROOT/.usage/.beat"
-t  "an overdue read says so"        "due now"        frame 99
-rm -f "$CC_PROFILE_ROOT/.usage/daemon.json" "$CC_PROFILE_ROOT/.usage/.beat"
+up() { PATH="$HOME/fakebin:$PATH" "$CCEX" ls -w --once --at "$1"; }
+t  "the next read is counted down"  "next read in"   up 99
+age_file 30 "$CC_PROFILE_ROOT/.usage/.beat"
+t  "an overdue read says so"        "due now"        up 99
+rm -f "$CC_PROFILE_ROOT/.usage/daemon.json" "$CC_PROFILE_ROOT/.usage/.beat" "$HOME/fakebin/systemctl" "$HOME/fakebin/launchctl"
 
 printf 'asking bee (on file: 10%% 5h / 20%% weekly)\nbee did not answer (timeout), trying the next\nswitching to cee\n' \
   > "$CC_PROFILE_ROOT/.usage/.step"
@@ -1296,7 +1337,7 @@ trail_pos() {                   # it belongs under the whole view, not inside it
 }
 t  "the trail prints below the view"      "below"              trail_pos
 t  "and says how long ago it ran"        "switching    "       frame 99
-touch -d '10 minutes ago' "$CC_PROFILE_ROOT/.usage/.step"
+age_file 600 "$CC_PROFILE_ROOT/.usage/.step"
 absent "a trail nobody cleared goes stale" "asking bee"  frame 99
 rm -f "$CC_PROFILE_ROOT/.usage/.step"
 absent "and stops once nothing is"         "asking bee"  frame 99
@@ -1412,6 +1453,106 @@ for c in ls use rotate pool add run env record tray; do
   t "ccex $c -h" "ccex $c" "$CCEX" "$c" -h
 done
 exits "unknown command exits 1"  1                       "$CCEX" bogus
+
+if [ "$(uname -s)" = Darwin ]; then
+echo "the login keychain (macOS)"
+# Real keychain items, under a service name belonging to this run and deleted again at the
+# end. The store is the thing under test, so faking it would only test the fake -- and no
+# other ccex, or Claude Code, ever writes a service called `ccex-test-<pid>`.
+teardown; setup
+export CCEX_CRED_STORE=keychain CCEX_KEYCHAIN_SERVICE="ccex-test-$$"
+
+kc_py() { PYTHONPATH="$(dirname "$CCEX")/../lib/py" python3 - "$@"; }
+
+kc_lend() {   # `security` finds the login keychain through HOME, and this HOME is a throwaway
+  # with no Library in it -- every call would otherwise sit waiting on a keychain that does
+  # not exist. Lending it the real one changes nothing about what is written: the service
+  # names still belong to this run, and kc_clean takes them away again.
+  mkdir -p "$HOME/Library"
+  ln -sfn "$REAL_HOME/Library/Keychains" "$HOME/Library/Keychains"
+}
+kc_lend
+
+kc_dirs() {   # every slot this suite could have written an item for, real or parked
+  kc_py <<'PY'
+import os
+from ccexlib import BASE, ROOT
+names = set(os.listdir(ROOT)) if os.path.isdir(ROOT) else set()
+names |= {"a", "b", "c", "bee", "cee", "fresh", "work"}       # park names `use` may invent
+print("\n".join([BASE] + sorted(os.path.join(ROOT, n) for n in names if not n.startswith("."))))
+PY
+}
+
+kc_move_in() {   # take the fixture's file logins and put them where macOS keeps one
+  kc_py <<'PY'
+import json, os
+from ccexlib import BASE, ROOT, cred_save, creds_for
+for d in [BASE] + [os.path.join(ROOT, n) for n in sorted(os.listdir(ROOT))
+                   if not n.startswith(".") and os.path.isdir(os.path.join(ROOT, n))]:
+    p = creds_for(d)
+    if os.path.exists(p):
+        cred_save(d, json.load(open(p)))
+        os.remove(p)          # only the keychain holds it now, which is the point
+PY
+}
+
+kc_clean() {
+  kc_dirs | while read -r d; do
+    kc_py "$d" <<'PY' || true
+import subprocess, sys
+from ccexlib import STORE
+subprocess.run(["security", "delete-generic-password", "-a", STORE.account,
+                "-s", STORE.service_for(sys.argv[1])], capture_output=True)
+PY
+  done
+}
+
+kc_where() {   # kc_where <slot>: the item that slot's login belongs in
+  kc_py "$1" <<'PY'
+import os, sys
+from ccexlib import BASE, ROOT, STORE
+print(STORE.service_for(BASE if sys.argv[1] == "default" else os.path.join(ROOT, sys.argv[1])))
+PY
+}
+
+kc_holds() {   # kc_holds <slot>: whose login that slot's item holds, if any
+  kc_py "$1" <<'PY'
+import os, sys
+from ccexlib import BASE, ROOT, cred_load
+d = BASE if sys.argv[1] == "default" else os.path.join(ROOT, sys.argv[1])
+print("holds %s" % ((cred_load(d).get("claudeAiOauth") or {}).get("accessToken") or "nothing"))
+PY
+}
+
+kc_move_in
+matches "the live slot is the item with no suffix"  'credentials$'               kc_where default
+matches "a parked slot is keyed by its directory"   'credentials-[0-9a-f]{8}$'   kc_where bee
+kc_distinct() { [ "$(kc_where bee)" = "$(kc_where cee)" ] && echo same || echo different; }
+t  "two slots never share an item"       "different"  kc_distinct
+t  "ls finds a login with no file behind it"  "c@example.com"  "$CCEX" ls
+t  "and reads the token out of the item"      "active"         "$CCEX" ls
+t  "with the login's own clock"               "REFRESH"        "$CCEX" ls -h
+
+"$CCEX" use bee --no-check >/dev/null 2>&1
+t  "use puts the incoming login in the live item"  "holds t-b@example.com"  kc_holds default
+t  "and parks the one that was live in its own"    "holds t-a@example.com"  kc_holds a
+t  "the slot that handed it over keeps none"       "holds nothing"          kc_holds bee
+t  "and ls says who is live now"                   "b@example.com"          bash -c '"$1" ls | awk "/\*/ {print \$4}"' _ "$CCEX"
+
+stub_claude
+t  "add carries a login to the slot it names"  "parked as fresh"         adds fresh@example.com
+t  "so the account is really there"            "fresh@example.com"       "$CCEX" ls
+t  "in the item for its own directory"         "holds t-fresh@example.com" kc_holds fresh
+
+printf 'y\n' | "$CCEX" rm cee >/dev/null 2>&1
+t  "rm takes the keychain item with it"        "holds nothing"           kc_holds cee
+absent "and the account is gone from ls"       "c@example.com"           "$CCEX" ls
+
+kc_clean
+t  "nothing of this run is left in the keychain" "holds nothing"         kc_holds default
+export CCEX_CRED_STORE=file
+unset CCEX_KEYCHAIN_SERVICE
+fi
 
 teardown
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
