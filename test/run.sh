@@ -957,6 +957,43 @@ out=$("$CCEX" use cee 2>&1)
 t  "an unverified fall-through is not used"  "nothing moved"  echo "$out"
 t  "so nothing moved at all"                 "a@example.com"  live_email
 
+teardown; setup                 # the account you named will not run at all: its org said no
+fake_claude '{"b@example.com": [10, 20]}' '["c@example.com"]'
+age_numbers
+out=$("$CCEX" use cee 2>&1)
+t      "a refusal is not numbers on file"      "not allowed to use Claude Code" echo "$out"
+t      "so the slot goes somewhere that runs"  "b@example.com"  live_email
+t      "the trail says the account said no"    "cee says no"    step_trail
+t      "and the way back is the pool"          "ccex pool in"   echo "$out"
+
+teardown; setup                 # --anyway is no answer to a refusal: nothing can run there
+fake_claude '{"b@example.com": [10, 20]}' '["c@example.com"]'
+age_numbers
+out=$("$CCEX" use cee --anyway 2>&1)
+t      "--anyway does not take a refused one"  "b@example.com"  live_email
+absent "nor is it offered as a way to"         "--anyway"       echo "$out"
+
+teardown; setup                 # one look is enough: the refusal outlives the run that heard it
+fake_claude '{"b@example.com": [10, 20]}' '["c@example.com"]'
+age_numbers
+"$CCEX" use cee >/dev/null 2>&1          # lands on bee, and files what cee said
+"$CCEX" use a >/dev/null 2>&1            # back to where we started
+before=$(calls)
+out=$("$CCEX" use cee 2>&1)
+t      "a remembered refusal costs no session" "$before"        calls
+t      "it says so without asking again"       "not allowed to use Claude Code" echo "$out"
+absent "and the slot stays where it is"        "c@example.com"  live_email
+exits  "a switch that moved nothing fails"     1                "$CCEX" use cee
+t      "putting it back is allowed"            "back in the rotation" "$CCEX" pool in cee
+
+teardown; setup                 # the account it picks for you has to run too
+spend_five cee 95
+fake_claude '{"c@example.com": [95, 30], "b@example.com": [10, 20]}' '["b@example.com"]'
+age_numbers
+out=$("$CCEX" use cee 2>&1)
+t      "a refused fall-through is not used"    "nothing moved"  echo "$out"
+t      "so nothing moved at all"               "a@example.com"  live_email
+
 teardown; setup                 # a slot left over from an earlier park holds the live login
 cp -r "$CC_PROFILE_ROOT/bee" "$CC_PROFILE_ROOT/leftover"
 python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d.setdefault("claudeAiOauth",{})["account"]={"email_address":"a@example.com"}; json.dump(d,open(p,"w"))' \

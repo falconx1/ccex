@@ -99,6 +99,11 @@ back spent, the slot goes to the next account with room instead and says so: nam
 account is not an instruction to sit at 93% while the daemon moves off it seconds later.
 `--anyway` is how you say you meant it. The report afterwards reads that same answer, so
 this costs one session, not two.
+
+An account that comes back refused -- its organisation has turned Claude Code off -- is not
+switched to at all, by name or otherwise, and `--anyway` does not apply: no session can start
+there, so the slot would move somewhere nothing works. `ccex pool in <account>` forgets the
+refusal and tries it again.
 U
 ;;
   rotate) cat <<'U'
