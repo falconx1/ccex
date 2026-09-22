@@ -122,6 +122,13 @@ rule rotation follows — naming an account is not an instruction to sit at 93% 
 daemon moves off it seconds later. `--anyway` is how you say you meant it. If nothing within
 reach has room, nothing moves at all.
 
+An account that comes back **refused** — its organisation has turned Claude Code off — is
+passed over rather than handed to, and naming it changes nothing: no session can start there,
+so the slot would move somewhere nothing works and nothing would ever read it again. That is
+the one answer `--anyway` is no answer to; `ccex pool in <account>` forgets the refusal and
+tries it again. The refusal is remembered, so the next `ccex use` on that account says so
+without spending a session on it.
+
 It is the same reading rotation takes, through the same code, into the same trail the live
 view shows, and the report afterwards reads that same answer — so asking first costs one
 session rather than two. Pass `--no-check` if you'd rather it neither asked nor reported.
@@ -319,7 +326,7 @@ and then the account is refused rather than slow — in words, and the same word
 It says so in two places: the usage panel paints a `permission_error` where the numbers go,
 and `claude -p` answers *"Your organization has disabled Claude subscription access for
 Claude Code"* and exits non-zero. Either is caught, and either holds the account out on the
-first look — this is the one thing rotation acts on the first time it sees it, because it is
+first look — from a switch you typed as much as from a rotation — this is the one thing rotation acts on the first time it sees it, because it is
 the one answer that will be the same tomorrow. That second one is asked
 only of an account whose launch already came back empty — one Haiku turn, the one thing in
 ccex that spends anything — because the panel cannot answer the question: an account in this

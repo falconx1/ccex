@@ -2,8 +2,9 @@
 import os, shutil, sys, time
 
 import burn
-from ccexlib import (BASE, ROOT, canon, cfg_for, creds_for, email_for, expand, held,
-                     id_for, load, logged_in, note_switch, running_at, save, seed_into, step)
+from ccexlib import (BASE, REFUSED, ROOT, barred, canon, cfg_for, creds_for, email_for, expand,
+                     held, id_for, load, logged_in, note_switch, running_at, save, seed_into,
+                     step)
 from decide import FIVE_AT, cap, own, ranked, reads
 from usage import account_json, cached
 
@@ -50,6 +51,16 @@ src_dir, src_email = parked[src_name]
 if held(src_dir):
     sys.exit("ccex: %s is held out of the pool; `ccex pool in %s` first"
              % (src_email, id_for(src_dir) or src_name))
+# Being refused is not being spent, and it is not being held either: an account whose
+# organisation has turned Claude Code off cannot run a session at all, so the slot would move
+# somewhere nothing works and nothing would ever read it again. Rotation already refuses to
+# land there; a switch you typed has the same nothing to gain from it. The record is cleared
+# by `ccex pool in`, which is the way to say the organisation changed its mind.
+refusal = barred(src_email)
+if refusal:
+    sys.exit("ccex: %s is %s, so nothing can run on it; `ccex pool in %s` clears that record "
+             "and tries it again" % (src_email, refusal, id_for(src_dir) or src_name))
+
 def taken(d):
     """Someone else's login is in here, and overwriting it would need a fresh browser sign-in."""
     if os.path.realpath(d) == os.path.realpath(src_dir):
@@ -86,7 +97,8 @@ if asking and not dry:
     while True:
         was = None if row["five"] is None else reads(row)
         st, got = ask(src_name, src_dir, was,
-                      ", going by what is on file" if src_name == named else ", trying the next")
+                      ", going by what is on file" if src_name == named else ", trying the next",
+                      refused=", trying the next")
         tried.add(src_name)
         if st == "ok":
             row = got
@@ -95,9 +107,23 @@ if asking and not dry:
         # asked for it by name, and unverified is not the same as spent. An account this
         # picked for you is not: landing on numbers nobody could confirm is what rotation
         # stopped doing, so it moves on to the next one instead.
-        if anyway or (not spent and (st == "ok" or src_name == named)):
+        #
+        # A refusal is neither, and naming the account changes nothing about it: silence is an
+        # account that probably still works, being told no is the account itself saying no
+        # session can start on it. `--anyway` cannot make one start, so it does not apply --
+        # only `ccex pool in`, which forgets the refusal, can put it back in reach.
+        refused = st in REFUSED
+        if not refused and (anyway or (not spent and (st == "ok" or src_name == named))):
             break
-        why = " and ".join(spent) if spent else "could not be asked (%s)" % st
+        if refused:
+            why = barred(src_email) or "not allowed to use Claude Code"
+            state = "%s is %s" % (src_email, why)
+            fix = " (`ccex pool in %s` clears that record and tries it again)" % (
+                id_for(src_dir) or src_name)
+        else:
+            why = " and ".join(spent) if spent else "could not be asked (%s)" % st
+            state = "%s is at %s, %s" % (src_email, reads(row), why)
+            fix = " (`ccex use %s --anyway` switches to it regardless)" % target
         # Somewhere it has to stop -- three sessions is already most of a minute, and it holds
         # the switch lock throughout. Not the account that is already live either: a slot left
         # behind by an earlier park still holds its credential, so ranking can offer you the
@@ -106,19 +132,22 @@ if asking and not dry:
         if len(tried) < TRIES:
             rows = [account_json("default", BASE)] + \
                    [account_json(n, d) for n, (d, e) in parked.items() if n not in tried]
+            # Nor may the one it picks for you be an account that has been refused. Ranking
+            # reads the pool file, and a refusal heard moments ago is not in it yet: rotation
+            # writes the hold on its next tick, which is minutes away and may never come.
             nxt = next((a for a in ranked(rows, at) if a["name"] in parked
-                        and a["email"].lower() != (live_email or "").lower()), None)
+                        and a["email"].lower() != (live_email or "").lower()
+                        and not barred(a["email"])), None)
         if nxt is None:
             # Landing on a known-spent account nobody asked for is the worst of both: not what
             # you named, and moved off again within seconds.
             step("%s %s, and there is nothing else worth reading" % (src_name, why))
-            sys.exit("ccex: %s is at %s, %s - and there is nothing else with room, so nothing "
-                     "moved (`ccex use %s --anyway` switches to it regardless)"
-                     % (src_email, reads(row), why, target))
-        step("%s has no room (%s), reading %s instead" % (src_name, why, nxt["name"]))
-        print("ccex: %s is at %s, %s - handing over to %s instead (`ccex use %s --anyway` "
-              "switches to it regardless)"
-              % (src_email, reads(row), why, nxt["email"], target), file=sys.stderr)
+            sys.exit("ccex: %s - and there is nothing else with room, so nothing moved%s"
+                     % (state, fix))
+        step(("%s says no (%s), reading %s instead" if refused else
+              "%s has no room (%s), reading %s instead") % (src_name, why, nxt["name"]))
+        print("ccex: %s - handing over to %s instead%s" % (state, nxt["email"], fix),
+              file=sys.stderr)
         src_name, (src_dir, src_email) = nxt["name"], parked[nxt["name"]]
         row = account_json(src_name, src_dir)
 
