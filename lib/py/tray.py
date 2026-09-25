@@ -28,8 +28,9 @@ if IND is None:
 
 from gi.repository import Gio, GLib, Gtk    # noqa: E402  -- after require_version, as gi insists
 
+import burn                                # the live account's rate, for the gap warning
 from ccexlib import canon, hm, is_base, running_at, slots
-from decide import FIVE_AT, cap, listing, reads
+from decide import FIVE_AT, cap, gap, gap_words, listing, ranked, reads
 from usage import GRACE, account_json, fill
 
 CCEX = os.environ.get("CCEX_BIN") or "ccex"
@@ -113,6 +114,11 @@ def read():
         a = account_json(name, d, now, {})
         a["current"] = is_base(d)
         a["short"] = canon(a["email"]) if a["email"] else name
+        if a["current"]:
+            # A rate for the account being spent and no other: it is the only one climbing,
+            # and reading the rest would be a file each for an estimate nobody draws.
+            a["rate_five"] = burn.rate(a["email"], "five_hour", now)
+            a["rate_seven"] = burn.rate(a["email"], "seven_day", now)
         rows.append(a)
     # Rotation's own order: the account in use, then the one a switch would land on, then
     # the one after that. The menu answers one question -- which account do I go to -- and
@@ -213,6 +219,7 @@ class Tray:
         self.busy = False     # a switch is out; the numbers it lands on are the ones to show
         self.on = None        # who was live at the last tick, so a move can announce itself
         self.warned = {}      # (email, window) -> the reset we already warned about
+        self.gapped = None    # the window we have already said the fleet runs out inside
         self.cols = Columns()  # what each cell comes to in the panel's own font
         self.tick()
         GLib.timeout_add_seconds(EVERY, self.tick)
@@ -246,7 +253,8 @@ class Tray:
                                GUIDE)
         self.moved(here, now)
         if here:
-            self.nearly(here, at)
+            self.nearly(here, at, rows)
+            self.short(here, rows, at)
 
     def moved(self, here, now):
         """One place says an account changed, whoever changed it.
@@ -260,12 +268,16 @@ class Tray:
             notify("now on %s" % here["short"],
                    "%s  ·  5h window resets %s" % (reads(here), left(here["five_resets"], now)))
 
-    def nearly(self, a, at):
+    def nearly(self, a, at, rows):
         """A word before rotation moves, not after: this account is nearly out of room.
 
         Once per window, not once per tick -- the reset time is what re-arms it, so a
         window that starts over can warn again and one that is simply sitting at 87% does
         not say so every ten seconds.
+
+        "Rotation moves off at 90%" is only true where there is an account to move to. With
+        the fleet spent it is the opposite of the truth, and reassurance is the last thing
+        five points from the end of your working day should be: `short()` is what says so.
         """
         for key, word in (("five", "5h"), ("seven", "weekly")):
             limit, p = cap(a, key, at), a[key]
@@ -276,7 +288,26 @@ class Tray:
                 continue
             self.warned[token] = a[key + "_resets"]
             notify("%s is near %d%%" % (a["short"], limit),
-                   "%s window at %d%%; rotation moves off at %d%%" % (word, p, limit))
+                   "%s window at %d%%; %s" % (word, p, "rotation moves off at %d%%" % limit
+                                              if ranked(rows, at, blind=True)
+                                              else "and nothing else has room to move to"))
+
+    def short(self, a, rows, at):
+        """The fleet is running out with nowhere to move to, and there is still time to act.
+
+        The account being spent is always the one with a rate, so the moment that rate says
+        it will be empty before anything else comes back is the moment to interrupt somebody
+        -- a long run can be landed, a cap can be lifted, a laptop can be left alone for ten
+        minutes. Said once per window, like every other thing this panel interrupts you with.
+        """
+        g = gap(rows, at)
+        if not g:
+            return
+        token = (a["email"], a["five_resets"])
+        if self.gapped == token:
+            return
+        self.gapped = token
+        notify("%s is running out, with nowhere to go" % a["short"], gap_words(g))
 
     def build(self, others):
         """The menu, whenever the set of accounts is not the one it was built from."""

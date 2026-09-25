@@ -140,6 +140,14 @@ Candidates must be under --at on both windows. Among those, ranking is by what t
 usage costs: used% x (time left in window / window length), 5-hour first, weekly as
 the tie-break. Rotating once exits 1 if every account is spent.
 
+A stay is not always good news. When every other account is spent and this one is still
+climbing, the burn rate is no longer a countdown to a switch but a countdown to not being
+able to work -- so it is said while there is still time to land what is running or lift a
+cap: "about 12m of room left, and nothing else has any until ai006 in 28m (a 16m gap)".
+The background daemon says it once per window, in its journal and in `--status`; the tray
+says it once per window too; `ccex ls -w` counts it down. It stops at the cap: past that it
+is not a warning but the nowhere-to-go the switch itself reports.
+
 Before the slot changes hands, the account being moved to is asked what it actually has
 left -- one short session on it, a few seconds. Nothing reports for a parked account, so
 its numbers are as old as the last time it was live, and an account spent somewhere else

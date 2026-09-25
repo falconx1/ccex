@@ -1,8 +1,10 @@
 """Print rotation's decision as one tab-separated line for `lib/rotate.sh`. Reads `ccex ls --json`."""
 import json, os, sys, time
 
+import burn
 from ccexlib import USAGE_DIR, barred, hm, hold_auto, load, save, slots, step
-from decide import FIVE_AT, FIVE_HOUR, WEEKLY_AT, cap, capped, decide, ranked, reads
+from decide import (FIVE_AT, FIVE_HOUR, WEEKLY_AT, cap, capped, decide, gap, gap_words,
+                    ranked, reads)
 
 accounts = json.load(sys.stdin)
 argv = sys.argv[1:]
@@ -196,6 +198,18 @@ if verify and not dry and verdict == "STAY":
                 message += "; %s reads %s, read ahead of the switch" % (n, reads(row))
             else:
                 message += "; %s could not be read ahead of the switch (%s)" % (n, st)
+
+# Staying put with nothing to move to is the case worth a sentence more than "staying put":
+# the numbers say how spent this account is, and only the rate says how long that leaves. The
+# daemon says the same thing from its own loop; this is the line a terminal gets.
+if verdict != "SWITCH":
+    live = next((a for a in accounts if a["name"] == "default"), None)
+    if live:
+        live["rate_five"] = burn.rate(live["email"], "five_hour")
+        live["rate_seven"] = burn.rate(live["email"], "seven_day")
+        coming = gap(accounts, at)
+        if coming:
+            message += "; " + gap_words(coming)
 
 if pulled:
     message += "; out of the pool until `ccex pool in`: " + ", ".join(dict.fromkeys(pulled))
