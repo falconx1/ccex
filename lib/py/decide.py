@@ -5,6 +5,9 @@ Its input is the list `ccex ls --json` prints; nothing here reads files or write
 """
 import time
 
+from burn import eta            # arithmetic only, on a rate the caller has already read
+from ccexlib import hm
+
 FIVE_HOUR, SEVEN_DAY = 5 * 3600, 7 * 86400
 FIVE_AT = 90        # the default --at; lib/background.sh's own default has to agree
 WEEKLY_AT = 99      # --at is about the 5-hour window; see default_for()
@@ -186,6 +189,88 @@ def listing(accounts, at=FIVE_AT):
     return live + order + rest
 
 
+def soonest_room(accounts, at, now=None):
+    """When the fleet next has an account rotation could land on: (seconds, name).
+
+    (None, None) when nothing is due back. Only an account that is merely spent comes back
+    on a clock: one that is held, refused or never measured is waiting on somebody rather
+    than on a window, and "when can I work again" is not a question it answers. An account
+    with both windows over their caps is free only once the later of the two has reset.
+    """
+    now = now or time.time()
+    soon = []
+    for a in accounts:
+        if a["name"] == "default" or a.get("held") or not a.get("logged_in"):
+            continue
+        if a["five"] is None or a["seven"] is None:
+            continue
+        blocked = [a[k] for k, w in (("five_resets", "five"), ("seven_resets", "seven"))
+                   if a[w] >= cap(a, w, at)]
+        if blocked and all(blocked):
+            soon.append((max(blocked) - now, a["name"]))
+    return min(soon) if soon else (None, None)
+
+
+def runway(live, at, now=None):
+    """(seconds until the live account trips the cap that will move it, which window).
+
+    Needs `rate_five`/`rate_seven` on the row, so only a caller that has read the burn
+    history gets an answer; without a rate there is nothing honest to say. Whichever window
+    arrives first is the one that counts, because it is the one that will move you.
+    """
+    best = (None, None)
+    for label, key, rk, pk in (("5h", "five", "rate_five", "five_resets"),
+                               ("weekly", "seven", "rate_seven", "seven_resets")):
+        secs, _ = eta(live.get(key), cap(live, key, at), live.get(rk), live.get(pk), now)
+        if secs is not None and (best[0] is None or secs < best[0]):
+            best = (secs, label)
+    return best
+
+
+def gap(accounts, at, now=None):
+    """The hole between the live account running out and anything else having room.
+
+    `(runway, wait, name)` -- how long this account lasts, how long until the fleet has room
+    again (None if nothing is due back) and whose account that is -- or None when there is no
+    hole to warn about.
+
+    An estimate is only a countdown to a switch while there is somewhere to switch to. When
+    every other account is spent it becomes a countdown to not being able to work at all, and
+    that is worth saying while there is still time to do something about it -- land what is
+    running, or lift a cap -- rather than at the moment it happens, which is what the `NONE`
+    verdict already says. So this is deliberately silent once the cap is actually crossed:
+    by then it is not a warning, it is the news.
+    """
+    now = now or time.time()
+    live = next((a for a in accounts if a["name"] == "default"), None)
+    if live is None or live.get("held"):
+        return None
+    if ranked(accounts, at, blind=True):
+        return None                       # somewhere to go: the switch is the answer
+    secs, _ = runway(live, at, now)
+    if secs is None:
+        return None                       # no rate yet, or not climbing at anything
+    wait, who = soonest_room(accounts, at, now)
+    if wait is not None and wait <= secs:
+        return None                       # what is waiting is back before this runs out
+    return secs, wait, who
+
+
+def gap_words(g):
+    """The one sentence a coming gap is said in, wherever it is said.
+
+    Three places say it -- the daemon's journal, the tray, the live view -- and they say it
+    the same way, because it is one fact and somebody reading two of them at once should not
+    have to work out whether they agree.
+    """
+    secs, wait, who = g
+    left = hm(secs) if secs >= 60 else "under a minute"
+    if wait is None:
+        return "about %s of room left, and nothing else has any" % left
+    return "about %s of room left, and nothing else has any until %s in %s (a %s gap)" % (
+        left, who, hm(wait), hm(wait - secs))
+
+
 def decide(accounts, at=FIVE_AT, blind=False):
     """(verdict, target, message): STAY, NONE, ERR, or SWITCH to `target`.
 
@@ -222,18 +307,10 @@ def decide(accounts, at=FIVE_AT, blind=False):
         why += ", and out of the pool (%s)" % live["held_auto"]
 
     if not room:
-        soon = []
-        for a in others:
-            if a.get("held") or a["name"] in nodata:
-                continue
-            blocked = [a[k] for k, w in (("five_resets", "five"), ("seven_resets", "seven"))
-                       if a.get(w) is not None and a[w] >= cap(a, w, at)]
-            if blocked and all(blocked):
-                soon.append((max(blocked), a["name"]))   # free only once the last one resets
         tail = ""
-        if soon:
-            t, n = min(soon)
-            left = int(t - time.time())
+        left, n = soonest_room(accounts, at)
+        if left is not None:
+            left = int(left)
             tail = "; soonest room is %s in %dh%02dm" % (n, left // 3600, left % 3600 // 60)
         if nodata:
             tail += "; no usage numbers for " + ", ".join(nodata)

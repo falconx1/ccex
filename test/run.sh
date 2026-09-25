@@ -1372,6 +1372,72 @@ t  "a held live account is left"  "held out of the pool"   frame 80
 t  "its own cap is predicted against" "not yet"            frame 80
 "$CCEX" pool cap a@example.com --clear >/dev/null
 
+climbing() {   # climbing <email> <from> <to>: ten minutes of samples, so a rate exists
+  python3 - "$CC_PROFILE_ROOT" "$1" "$2" "$3" <<'PYEOF'
+import json, os, re, sys, time
+root, email, a, b = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+os.makedirs(os.path.join(root, ".usage"), exist_ok=True)
+p = os.path.join(root, ".usage", re.sub(r"[^A-Za-z0-9]+", "_", email.lower()) + ".burn.json")
+now = int(time.time())
+json.dump({"email": email, "samples": [[now - 600, a, 5], [now - 300, (a + b) // 2, 5],
+                                       [now, b, 5]]}, open(p, "w"))
+PYEOF
+}
+
+resets_in() {   # resets_in <slot> <seconds>: when that account's 5-hour window comes back
+  python3 -c 'import json, sys, time
+c = json.load(open(sys.argv[1]))
+c["cachedUsageUtilization"]["utilization"]["five_hour"]["resets_at"] = time.strftime(
+    "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() + float(sys.argv[2])))
+json.dump(c, open(sys.argv[1], "w"))' "$CC_PROFILE_ROOT/$1/.claude.json" "$2"
+}
+
+echo "running out with nowhere to go"
+# The estimate is a countdown to a switch only while there is one to make. With every other
+# account spent it is a countdown to not being able to work, and that is worth saying while
+# there is still time to land what is running.
+teardown; setup
+spend_five bee 95; spend_five cee 95        # nothing else is under its cap
+resets_in bee 3600; resets_in cee 7200      # bee is the one that comes back first
+spend_live five 60
+climbing a@example.com 50 60                # ten points in ten minutes: 60%/h, so 30m of room
+t  "the estimate says how much is left"    "30m of room left"    "$CCEX" rotate --at 90 --no-launch
+t  "and what comes back, and when"         "until bee in"        "$CCEX" rotate --at 90 --no-launch
+matches "and how long the hole is"         'a [0-9]+m gap'      "$CCEX" rotate --at 90 --no-launch
+t  "the view counts down to the wall"      "nowhere to go in"    frame 90
+t  "and names what it is waiting for"      "soonest room is bee" frame 90
+
+teardown; setup                 # cee has room, so the countdown is to a switch like any other
+spend_five bee 95
+resets_in bee 3600
+spend_live five 60
+climbing a@example.com 50 60
+absent "nothing to warn about while one has room" "of room left" "$CCEX" rotate --at 90 --no-launch
+absent "and the view still reads as a switch"     "nowhere to go" frame 90
+
+teardown; setup                 # spent, but back before this account runs out: no hole at all
+spend_five bee 95; spend_five cee 95
+resets_in bee 300; resets_in cee 7200
+spend_live five 60
+climbing a@example.com 50 60
+absent "a window that resets first is no gap" "of room left" "$CCEX" rotate --at 90 --no-launch
+
+teardown; setup                 # no rate, nothing honest to say about time
+spend_five bee 95; spend_five cee 95
+spend_live five 60
+absent "without a rate it says nothing"  "of room left"  "$CCEX" rotate --at 90 --no-launch
+t      "but the switch decision stands"  "staying put"   "$CCEX" rotate --at 90 --no-launch
+
+teardown; setup                 # already over the cap: that is the NONE verdict, not a warning
+spend_five bee 95; spend_five cee 95
+resets_in bee 3600; resets_in cee 7200
+spend_live five 95
+climbing a@example.com 85 95
+out=$("$CCEX" rotate --at 90 --no-launch 2>&1)
+t      "over the line it is news, not a warning" "every other account is too" echo "$out"
+absent "so the countdown is not repeated"        "of room left"               echo "$out"
+t      "and it still says when room returns"     "soonest room is bee"        echo "$out"
+
 burn_says() {   # the estimate is arithmetic, so it is testable without a terminal
   CCEX_BASE="$HOME/.claude" CCEX_ROOT="$CC_PROFILE_ROOT" \
   PYTHONPATH="$(dirname "$CCEX")/../lib/py" python3 - "$1" <<'PYEOF'

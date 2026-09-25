@@ -175,6 +175,11 @@ destination needs no readings at all, so it is always there. A window that refil
 before the cap is reached says `weekly resets first` instead of naming a time that would
 never arrive.
 
+When there is nowhere to go — every other account spent, held or refused — the same clock
+means something else, and the line says so: `nowhere to go in 12m 04s`, with the soonest
+account to come back named under it. That is the one worth acting on, because no switch is
+going to arrive and fix it; it is the fleet's last twelve minutes, not this account's.
+
 It is the same table `ccex ls` prints — there is one, so the two can never disagree about a
 column — redrawn as the numbers land. `▶` marks the account you are billing and `›` the one
 the arrows are on. `POOL` and `CAP` sit by the number because those are the things you act
@@ -308,6 +313,13 @@ turns out to have no room is passed over. So is one that *won't answer* — no `
 launch, no folder it trusts, a check that times out — because an account that can be asked
 is a better answer than one that cannot. Up to three are asked; asking is a session each,
 and three is already most of a minute.
+
+A stay with nowhere to go is worth saying out loud before it arrives. While the live account
+is still under its cap and every other account is spent, the burn rate is the only thing that
+knows how long the whole fleet has left — so the daemon, the tray and `ccex ls -w` all say the
+same sentence, once per window: `about 12m of room left, and nothing else has any until ai006
+in 28m (a 16m gap)`. It is deliberately silent once the cap is crossed, because by then it is
+not a warning, it is the `nowhere to go` the switch already reports.
 
 When *none* of them will answer, the slot stays where it is. The numbers on file are not a
 fallback for an account nothing can read: a window past its reset reads 0% with nobody asked,
@@ -829,10 +841,18 @@ to the next with room, and a held one is refused with the command that puts it b
 Notifications are for the two things worth interrupting you: **the live account changed** —
 by your click, by a terminal, or by rotation while you were elsewhere — or **a switch was
 refused**, in the words `ccex use` refused it in. Anything that moved nothing says nothing,
-so `Rotate now` with room to spare is silent. There is one more, before the fact: when the
+so `Rotate now` with room to spare is silent. There are two more, before the fact. When the
 live account comes within 5 points of where rotation would move off it — its own cap, or
 whatever `--at` the daemon is really running — the panel says so once, and says it again
-only once that window has started over.
+only once that window has started over; it promises the switch only when there is an account
+to make it with.
+
+And when there is not — when the burn rate says this account runs out before anything else
+comes back — it says **that**, once per window: *"windi is running out, with nowhere to go ·
+about 12m of room left, and nothing else has any until jamiedevine in 28m (a 16m gap)"*.
+Five points is a distance, and at the 130%/h a fan-out burns at it is under three minutes'
+notice; this one is timed off the rate instead, which is the difference between a warning
+and an epitaph.
 
 Drawing it costs nothing. The rows come from the files `ccex ls` reads, once every ten
 seconds, and nothing here ever starts a session to fill in a panel — with `ccex record` in

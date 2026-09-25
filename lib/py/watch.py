@@ -10,7 +10,8 @@ import os, re, select, shutil, subprocess, sys, tempfile, termios, threading, ti
 
 import burn
 from ccexlib import DAEMON, ROOT, USAGE_DIR, fresh, hm, save, slots
-from decide import FIVE_AT, cap, decide, listing, ranked, reads
+from decide import (FIVE_AT, cap, decide, gap, gap_words, listing, ranked, reads,
+                    soonest_room)
 from usage import GRACE, account_json, age_text, bar, live_map
 
 PRESETS = [10, 30, 60, 300, 900, 1800]
@@ -207,6 +208,7 @@ class View:
         self.started = time.time()
         self.rows, self.live = [], None
         self.verdict, self.message = "", ""
+        self.gap = None       # (runway, wait, who) when the fleet runs out before it refills
         self.timer, self.note, self.busy = dict(NO_UNIT), "", ""
         self.asked, self.walked, self.pids = 0.0, 0.0, {}
         self.serving = False
@@ -306,6 +308,13 @@ class View:
         # `blind` has to match the tick's, or this view predicts NONE while the tick
         # switches to an account nothing has measured. Verification is what reads it.
         self.verdict, _, self.message = decide(rows, self.at, blind=self.verify)
+        # The estimate is worth more than a countdown to a switch: when nothing else has
+        # room, it is a countdown to not being able to work, and that belongs in the one
+        # sentence every reader of this loop already looks at -- the journal, `--status`,
+        # the line under the view.
+        self.gap = gap(rows, self.at, now)
+        if self.gap and self.verdict != "SWITCH":
+            self.message += "; " + gap_words(self.gap)
         self.live = next((a for a in rows if a["name"] == "default"), None)
         if self.live:
             if self.last_live and self.last_live != self.live["email"]:
@@ -655,7 +664,13 @@ class View:
             nxt.add("now", RED).add(": %s" % self.message)
         elif best:
             secs, label, pct, limit, rate = best
-            nxt.add("in %s" % hms(secs), RED if secs < 900 else YELLOW)
+            # The same clock means two different things, and only one of them is a switch.
+            # With the fleet spent it is counting down to not being able to work, and a line
+            # that says "next switch in 29m" reads as a plan when it is a wall.
+            if self.gap:
+                nxt.add("nowhere to go in %s" % hms(secs), RED)
+            else:
+                nxt.add("in %s" % hms(secs), RED if secs < 900 else YELLOW)
             nxt.add(" (%s)" % time.strftime("%H:%M", time.localtime(now + secs)), DIM)
             nxt.add("  %s is at %d%%, climbing %.1f%% an hour to its %d%% cap"
                     % (label, pct, rate, limit))
@@ -678,6 +693,11 @@ class View:
                     to.add(" (numbers %dm old)" % (dest["age_s"] // 60), GREY)
         elif self.verdict != "SWITCH":
             to.add("no account is under its cap right now", RED)
+            # Where the queue is empty, when it fills up again is the only answer there is,
+            # and it is the one you plan the next twenty minutes around.
+            wait, who = soonest_room(self.rows, self.at, now)
+            to.add("; soonest room is %s in %s" % (who, hm(wait)) if wait is not None
+                   else "; nothing is due back", GREY)
         if resets_first and best:
             to.add("; %s resets first" % " and ".join(resets_first), GREY)
         L.append(to)
@@ -769,7 +789,7 @@ def serve(v):
     minutes. This notices within one --every, because a statusline write is a file whose
     mtime it is already watching, and it costs a stat per file to find out.
     """
-    beat, said = 0.0, 0.0
+    beat, said, warned = 0.0, 0.0, None
     try:                    # what is actually running, for `ccex ls -w` to predict against
         save(DAEMON, {"at": v.at, "every": "%ds" % v.every, "refresh": v.refresh,
                       "since": time.strftime("%F %T")})
@@ -785,6 +805,14 @@ def serve(v):
                 f.write(v.message + "\n")
         except OSError:
             pass
+        # A gap is said once per window, not once per tick: the journal is read after the
+        # fact and ten seconds of the same sentence would bury the switch it precedes. A new
+        # account, or the same one into a new window, arms it again.
+        if v.gap and v.verdict != "SWITCH" and v.live:
+            key = (v.live["email"], v.live["five_resets"])
+            if key != warned:
+                warned = key
+                print("ccex: %s: %s" % (v.live["email"], gap_words(v.gap)), flush=True)
         due = v.refresh and time.time() - beat >= v.refresh
         if v.verdict == "SWITCH" or due:
             beat = time.time()
