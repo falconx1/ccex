@@ -16,6 +16,24 @@ WEEKLY_AT = 99      # --at is about the 5-hour window; see default_for()
 # twelve hours, and the last five hours are the default -- one window left to spend it in.
 RELAX_FROM, RELAX_EVERY, RELAX_BY, LAST = 48 * 3600, 12 * 3600, 5, 5 * 3600
 REFILL_SOON = 3600      # a 5-hour window this close to over is quota you get twice over
+LOGIN_FLOOR = 300       # a login with less left than this will not outlast the switch onto it
+
+
+def expired(a, now=None):
+    """Whether this account's login is past saving without a browser.
+
+    The refresh token is the clock that ends in a login prompt, and an account whose token
+    has run out is not slow, not spent and not held: it cannot be used at all until somebody
+    signs in. Landing on one puts a login screen in front of whatever was running, which is
+    the one failure a switch is supposed to prevent rather than cause. Minutes from the end
+    count as the end -- the switch itself takes longer than that, and an account that dies a
+    moment after you arrive strands you just as completely.
+
+    An account with no expiry on file is left alone: nothing about it says expired, and
+    reading a missing date as one would empty the fleet over a credential we have not seen.
+    """
+    t = a.get("refresh_at")
+    return t is not None and t - (now or time.time()) <= LOGIN_FLOOR
 
 
 def default_for(key, at):
@@ -124,10 +142,35 @@ def capped(a):
     return a.get("cap_five") is not None or a.get("cap_seven") is not None
 
 
+def reachable(a, now=None):
+    """Whether rotation may land here at all, whatever its numbers say.
+
+    In the pool, and logged in -- which is two things, and the credential file only says one
+    of them. A parked account keeps its `claudeAiOauth` long after the refresh token in it has
+    expired, so `expired` asks the other one: whether that login would still be a login on
+    arrival. Every reason an account is out of reach goes here, so each place that ranks,
+    waits for or reads an account asks one question rather than repeating three.
+    """
+    return bool(a.get("logged_in")) and not a.get("held") and not expired(a, now)
+
+
+def pool_state(a):
+    """What the POOL column says about this account: `in`, `held` or `expired`.
+
+    A dead login outranks a hold. Both keep rotation off the account, but only one of them
+    is undone by `ccex pool in`: this one wants `ccex add`, and a cell that said `held` would
+    send you to the wrong command. The tuple order is also the order the column sorts in.
+    """
+    return "expired" if expired(a) else "held" if a.get("held") else "in"
+
+
+POOL_STATES = ("in", "held", "expired")
+
+
 def usable(a, at):
-    """Could rotation land here right now: logged in, has numbers, not held, under its caps."""
-    return bool(a.get("logged_in")) and a.get("five") is not None and a.get("seven") is not None \
-        and not a.get("held") and a["five"] < cap(a, "five", at) and a["seven"] < cap(a, "seven", at)
+    """Could rotation land here right now: reachable, has numbers, under its caps."""
+    return reachable(a) and a.get("five") is not None and a.get("seven") is not None \
+        and a["five"] < cap(a, "five", at) and a["seven"] < cap(a, "seven", at)
 
 
 def unmeasured(a):
@@ -138,8 +181,7 @@ def unmeasured(a):
     account that has some number to count down from. With no reading at all there is
     nothing to infer, so it stays invisible unless something goes and looks.
     """
-    return bool(a.get("logged_in")) and not a.get("held") \
-        and (a.get("five") is None or a.get("seven") is None)
+    return reachable(a) and (a.get("five") is None or a.get("seven") is None)
 
 
 def ranked(accounts, at=FIVE_AT, blind=False):
@@ -200,9 +242,9 @@ def soonest_room(accounts, at, now=None):
     now = now or time.time()
     soon = []
     for a in accounts:
-        if a["name"] == "default" or a.get("held") or not a.get("logged_in"):
-            continue
-        if a["five"] is None or a["seven"] is None:
+        # A window comes back on a clock; a hold or a dead login does not.
+        if a["name"] == "default" or not reachable(a, now) or a["five"] is None \
+                or a["seven"] is None:
             continue
         blocked = [a[k] for k, w in (("five_resets", "five"), ("seven_resets", "seven"))
                    if a[w] >= cap(a, w, at)]
@@ -298,6 +340,7 @@ def decide(accounts, at=FIVE_AT, blind=False):
     others = [a for a in accounts if a["name"] != "default"]
     nodata = [a["name"] for a in others if not a["logged_in"] or a["five"] is None or a["seven"] is None]
     held = [a["name"] for a in others if a.get("held")]
+    gone = [a["name"] for a in others if expired(a)]
     room = ranked(accounts, at, blind)
 
     why = "%s is at %s (%s over %s)" % (
@@ -312,8 +355,14 @@ def decide(accounts, at=FIVE_AT, blind=False):
         if left is not None:
             left = int(left)
             tail = "; soonest room is %s in %dh%02dm" % (n, left // 3600, left % 3600 // 60)
-        if nodata:
-            tail += "; no usage numbers for " + ", ".join(nodata)
+        if gone:
+            # Out of reach for a reason no clock fixes and `ccex pool in` does not either --
+            # and the more useful thing to say about an account that also has no numbers,
+            # since signing it back in is what would get it some.
+            tail += "; login expired, needs `ccex add`: " + ", ".join(gone)
+        blank = [n for n in nodata if n not in gone]
+        if blank:
+            tail += "; no usage numbers for " + ", ".join(blank)
         if held:
             tail += "; out of the pool: " + ", ".join(
                 "%s (%s)" % (a["name"], a["held_auto"]) if a.get("held_auto") else a["name"]

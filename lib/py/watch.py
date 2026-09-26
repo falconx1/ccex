@@ -6,11 +6,12 @@ slower --every tick, and only that tick walks /proc or asks systemd anything. No
 here starts a session unless --refresh says it may, and then off the render loop, so the
 view never freezes waiting for one.
 """
-import os, re, select, shutil, subprocess, sys, tempfile, termios, threading, time, tty
+import base64, os, re, select, shutil, subprocess, sys, tempfile, termios, threading, time, tty
 
 import burn
 from ccexlib import DAEMON, ROOT, USAGE_DIR, fresh, hm, save, slots
-from decide import (FIVE_AT, cap, decide, gap, gap_words, listing, ranked, reads,
+from decide import (FIVE_AT, POOL_STATES, cap, decide, gap, gap_words, listing, pool_state,
+                    ranked, reads,
                     soonest_room)
 from usage import GRACE, account_json, age_text, bar, live_map
 
@@ -127,7 +128,7 @@ class Line:
 
 
 TAIL = 9            # CHECKED and REFRESH: both a short word or a two-part clock
-POOL, CAP = 6, 8    # `held` or `in`; two percentages with a slash and a star between them
+POOL, CAP = 8, 8    # `in`, `held` or `expired`; two percentages with a slash and a star between
 
 GAP = "    "        # between the two windows: each is a percentage, a bar and a clock, and
                     # they read as one thing only if there is space around them
@@ -165,6 +166,44 @@ def token_left(t, now):
         return "%dd %02dh" % (left // 86400, left % 86400 // 3600), \
                YELLOW if left < 3 * 86400 else GREY
     return "%dh %02dm" % (left // 3600, left % 3600 // 60), RED
+
+
+def osc52(text):
+    """Ask the terminal itself to put this on the clipboard.
+
+    The only way that reaches your clipboard through SSH, tmux or a remote desktop, and it
+    costs one write -- but GNOME's own terminal ignores it, and nothing says whether a
+    terminal listened. It goes out on the drawing thread because it is an escape in the same
+    stream the frames are, and two writers on one stream interleave.
+    """
+    try:
+        sys.stdout.write("\033]52;c;%s\a" % base64.b64encode(text.encode()).decode())
+        sys.stdout.flush()
+    except OSError:
+        pass
+
+
+def clip(text):
+    """Hand this to the desktop's own clipboard tool: the name of the one that took it, or None.
+
+    `wl-copy` under Wayland, `xclip` or `xsel` under X. Each can take seconds to give up on a
+    display it cannot reach, which is why nothing on the drawing thread calls this.
+    """
+    tools = [["wl-copy"]] if os.environ.get("WAYLAND_DISPLAY") else []
+    if os.environ.get("DISPLAY"):
+        tools += [["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]]
+    for cmd in tools:
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            # Nothing captured: each of these leaves a child behind to serve the selection,
+            # and a pipe held open for its output would make this wait for that child too.
+            subprocess.run(cmd, input=text.encode(), stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=2, check=True)
+            return cmd[0]
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return None
 
 
 def fit_email(email, width):
@@ -490,7 +529,7 @@ class View:
             return None if not t else max(0.0, t - now)
         keys = {
             "#": lambda a: a["id"],
-            "pool": lambda a: int(bool(a["held"])),         # in first
+            "pool": lambda a: POOL_STATES.index(pool_state(a)),            # in first
             "cap": lambda a: (cap(a, "five", at), cap(a, "seven", at))
                    if a["cap_five"] is not None or a["cap_seven"] is not None else None,
             "account": lambda a: a["email"].lower(),
@@ -521,14 +560,40 @@ class View:
             self.sort, self.reverse = name, False
 
     def click(self, x, y):
-        """A left click, in 1-based screen cells. The header sorts; a row is selected."""
+        """A left click, in 1-based screen cells. The header sorts; a row is selected.
+
+        A click on an address copies it as well. It is the one cell worth having somewhere
+        else -- a login form, a message to whoever shares the account -- and the one a narrow
+        terminal cuts short, so the click hands over all of it rather than what is drawn.
+        """
+        col = next((name for name, x0, x1 in self.cols if x0 < x <= x1), None)
         if y == 2:
-            for name, x0, x1 in self.cols:
-                if x0 < x <= x1:
-                    self.sort_by(name)
-                    return
+            if col:
+                self.sort_by(col)
         elif y >= 3 and y - 3 < len(self.shown):
-            self.cursor = self.shown[y - 3]["email"]
+            a = self.shown[y - 3]
+            self.cursor = a["email"]
+            if col == "account" and a["email"]:
+                self.copy(a["email"])
+
+    def copy(self, email):
+        """Copy an address, and say so once it has gone -- without holding up the view.
+
+        The terminal is asked here and now; the desktop's tool is asked on a thread of its
+        own, because one that cannot reach its display waits out a timeout, and the view it
+        would be waiting in is the one showing you your limits.
+        """
+        osc52(email)
+        self.note = "copying %s" % email
+
+        def run():
+            how = clip(email)
+            # No `self.sampled` poke, unlike `background()`: nothing here changed the data,
+            # and the note is read afresh by the next frame, which is at most a second off.
+            self.note = "copied %s%s" % (email, "" if how else
+                                         " via the terminal; no wl-copy or xclip here")
+
+        threading.Thread(target=run, daemon=True).start()
 
     def frame(self, width, height, colour=True):
         L, now = [], time.time()
@@ -605,10 +670,8 @@ class View:
             # pool state, whoever put it there: out of the pool is out of the pool, and
             # `ccex pool in` is the way back from either. Why it went is worth a sentence,
             # not a second word in a six-column cell.
-            if a["held"]:
-                row.add("held", YELLOW, POOL)
-            else:
-                row.add("in", GREY, POOL)      # not `colour`: that is this frame's own flag
+            state = pool_state(a)
+            row.add(state, {"expired": RED, "held": YELLOW}.get(state, GREY), POOL)
             # How far rotation may spend this account is a separate fact from whether it
             # may choose it, so it has its own column: a held account keeps its cap for when
             # it is back, and neither hides the other.

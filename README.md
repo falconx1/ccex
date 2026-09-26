@@ -160,7 +160,8 @@ this switch, and to what* — is answered in one place.
 token's own clock — the access token renews itself and its hours are nobody's business, but
 when the refresh token goes, that account wants a browser. It counts in days while it has
 them and turns red inside the last one, so a parked account does not expire quietly and
-surprise rotation. Both tail columns give way on a narrow terminal, `REFRESH` first.
+surprise rotation. Once it reads `expired`, nothing switches there — see below. Both tail
+columns give way on a narrow terminal, `REFRESH` first.
 
 The countdowns tick every second, the `╵` in each bar is the percentage that account
 counts as out of room at, and `next switch` is the estimate: how fast the live account's
@@ -184,7 +185,7 @@ It is the same table `ccex ls` prints — there is one, so the two can never dis
 column — redrawn as the numbers land. `▶` marks the account you are billing and `›` the one
 the arrows are on. `POOL` and `CAP` sit by the number because those are the things you act
 on: `in` or `held` says whether rotation may choose the account, and `ccex pool in 3` is the
-way back; `CAP` is how far rotation may spend it if the account sets its own limits, `50/30`,
+way back — or `expired`, a dead login, where the way back is `ccex add`; `CAP` is how far rotation may spend it if the account sets its own limits, `50/30`,
 or `-` when it follows the defaults. They are two columns because they are two facts: a held
 account keeps its cap for when it is back.
 
@@ -880,6 +881,8 @@ rotations. `▶` marks the live account.
 
 **POOL** is whether rotation may choose the account: `in`, or `held` — by you, or by
 rotation when it found the week spent or the account refused. `ccex pool in` is the way back.
+`expired` outranks both: the login has run out, nothing will switch there, and `ccex add
+<slot>` is the way back rather than the pool.
 
 **CAP** shows that account's own out-of-room percentages as `5h/weekly` — `-` for a window
 that still follows `--at`, and `*` while the week's number is not the one you set (see
@@ -899,6 +902,14 @@ the spend.
 **REFRESH** is how long the login has left. The refresh token is what buys new access tokens,
 it lasts on the order of a month, and when it runs out the account needs a real browser login
 again. It is read straight out of `.credentials.json` — nothing is sent anywhere to compute it.
+
+An account reading `expired` is not a candidate: rotation will not land on it, `ccex use` will
+not switch to it by name, and `--anyway` does not apply, because a parked slot keeps its
+credential file long after the token inside it is dead. The switch itself would work — that is
+the trap — and the next thing you typed would be a login prompt with your session behind it. A
+login with minutes left counts as expired too; the switch outlives it. `ccex add <slot>` signs
+that account back in, and the moment it has a token the account is a candidate again, with no
+pool command to remember.
 
 ## How it works
 
