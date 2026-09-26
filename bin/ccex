@@ -25,7 +25,8 @@ once, followed by what rotation would do next:
   #         its number: `ccex use 3` is the whole switch; ▶ marks the live account
   POOL      `in` when rotation may choose this account, `held` when it is out of the
             rotation pool -- by you, or by rotation when it found the account spent or
-            refused
+            refused -- and `expired` when its login has run out: `ccex add <slot>` signs it
+            back in, where `ccex pool in` would not
   CAP       5h/weekly percentages this account counts as out of room at, if it sets its
             own (`ccex pool cap`); `-` when it follows the defaults
   ACCOUNT   the account, by address; `ccex use` takes that, its number, or its slot name
@@ -104,6 +105,10 @@ An account that comes back refused -- its organisation has turned Claude Code of
 switched to at all, by name or otherwise, and `--anyway` does not apply: no session can start
 there, so the slot would move somewhere nothing works. `ccex pool in <account>` forgets the
 refusal and tries it again.
+
+An account whose login has expired is refused the same way, and for the same reason: the
+credential file outlives the refresh token in it, so the switch would work and the next thing
+you typed would be a browser login. `ccex add <slot>` signs it back in.
 U
 ;;
   rotate) cat <<'U'
@@ -118,6 +123,11 @@ onto whichever account has the most usable room. With no flag it does that once,
 
 An account with a cap of its own uses that instead of --at, in both directions -- see
 `ccex pool -h`.
+
+A candidate also has to have a login that will still be one on arrival. A parked slot keeps
+its credential after the refresh token in it has died, so an account whose REFRESH reads
+`expired` -- or is minutes from it -- is passed over rather than switched to, and `ccex ls`
+says which. `ccex add <slot>` signs it back in and it is a candidate again.
 
 Keep it running:
 

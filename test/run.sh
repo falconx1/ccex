@@ -175,7 +175,7 @@ t  "a capped account is skipped"  "c@example.com"         bash -c '"$1" pool cap
 t  "and the reason is named"      "capped by their own"   bash -c '"$1" pool cap cee --5h 45 >/dev/null; "$1" rotate --at 80 -n --no-launch' _ "$CCEX"
 exits "nowhere to go exits 1"     1                       "$CCEX" rotate --at 80 -n --no-launch
 t  "clearing restores the default" "back on the defaults" "$CCEX" pool cap cee --clear
-t  "held and capped show both"    "held  5/99"            bash -c '"$1" pool out bee >/dev/null; "$1" ls | grep b@example.com' _ "$CCEX"
+t  "held and capped show both"    "held    5/99"            bash -c '"$1" pool out bee >/dev/null; "$1" ls | grep b@example.com' _ "$CCEX"
 "$CCEX" pool in bee >/dev/null
 t  "rm releases the cap too"      "no b@example.com"      bash -c 'printf "y\n" | "$1" rm bee >/dev/null 2>&1; grep -q b@example.com "$2/.caps.json" && echo "still there" || echo "no b@example.com"' _ "$CCEX" "$CC_PROFILE_ROOT"
 
@@ -936,6 +936,71 @@ absent "but a silence is not a refusal"        "b@example.com"      pool_has
 "$CCEX" rotate --at 80 >/dev/null 2>&1
 t      "and stays that way however often"      "none"               pool_has
 
+echo "a login that has run out"
+# A parked slot keeps its credential long after the refresh token in it has died. Landing
+# there is a switch that works and a login prompt in front of whatever was running.
+token_expires() {   # token_expires <slot> <seconds from now>: when its refresh token dies
+  python3 -c 'import json, sys, time
+p = sys.argv[1]
+c = json.load(open(p))
+c["claudeAiOauth"]["refreshTokenExpiresAt"] = int((time.time() + float(sys.argv[2])) * 1000)
+json.dump(c, open(p, "w"))' "$CC_PROFILE_ROOT/$1/.credentials.json" "$2"
+}
+
+teardown; setup                 # bee has the most room and a login that ran out yesterday
+token_expires bee -86400
+t      "rotation lands where a session can start" "c@example.com" \
+       "$CCEX" rotate --at 80 -n --no-launch
+absent "not on the account with a dead login"     "b@example.com" \
+       "$CCEX" rotate --at 80 -n --no-launch
+t      "and ls still shows it for what it is"     "expired"       "$CCEX" ls -w --once --at 80
+t      "the POOL column says so, not in or held"  "expired"       pool_col b@example.com
+"$CCEX" pool out bee >/dev/null 2>&1
+t      "a dead login outranks a hold"             "expired"       pool_col b@example.com
+t      "and the others still read as ever"        "in"            pool_col c@example.com
+
+teardown; setup                 # both logins gone: there is nowhere to go, and it says why
+token_expires bee -86400; token_expires cee -3600
+out=$("$CCEX" rotate --at 80 -n --no-launch 2>&1)
+t      "no login left is nowhere to go"      "every other account is too"    echo "$out"
+t      "and it names what needs a browser"   'login expired, needs `ccex add`' echo "$out"
+t      "both of them"                        "bee, cee"                      echo "$out"
+
+teardown; setup                 # naming it by hand is the same switch, so it is refused too
+token_expires bee -60
+out=$("$CCEX" use bee 2>&1)
+t      "a switch you typed is refused"       "login has expired" echo "$out"
+t      "and says what signs it back in"      "ccex add bee"      echo "$out"
+t      "so the slot stays where it is"       "a@example.com"     live_email
+exits  "and it is a failure"                 1                   "$CCEX" use bee
+"$CCEX" use bee --anyway >/dev/null 2>&1
+t      "--anyway is no answer to a dead login" "a@example.com"   live_email
+
+teardown; setup                 # a login with minutes left will not outlast the switch onto it
+token_expires bee 120
+t      "minutes from the end count as the end" "login expires in" "$CCEX" use bee
+t      "and it is still the browser that fixes it" "ccex add bee"  "$CCEX" use bee
+
+teardown; setup                 # never measured and no login either: not a blind candidate
+unmeasure bee b_example_com.json
+token_expires bee -60
+spend_five cee 95
+fake_claude '{"b@example.com": [7, 11]}'
+age_numbers
+out=$("$CCEX" rotate --at 80 2>&1)
+t      "an expired account is not read blind" "every other account is too" echo "$out"
+t      "and it is named for its login, not its numbers" 'login expired, needs `ccex add`: bee' echo "$out"
+absent "rather than as an account with no numbers"     "no usage numbers for bee"           echo "$out"
+absent "so nothing launches it"               "asking bee"                 echo "$out"
+t      "and the slot stays where it is"       "a@example.com"              live_email
+
+teardown; setup                 # days left is a login like any other
+token_expires bee 864000
+fake_claude '{"b@example.com": [10, 20]}'
+age_numbers
+"$CCEX" use bee >/dev/null 2>&1
+t      "a live login switches as it always did" "b@example.com" live_email
+
 echo "a switch you typed"
 teardown; setup                 # cee is spent; naming it anyway must say so before it moves
 spend_five cee 95
@@ -1315,6 +1380,48 @@ t  "s sorts by the next column"    "#▾"                       drive s
 t  "and S turns it round"          "#▴"                       drive sS
 t  "a click on a header sorts by it" "POOL▾"                   drive '\x1b[<0;10;2M'
 t  "and again turns it round"       "POOL▴"                    drive '\x1b[<0;10;2M\x1b[<0;10;2M'
+# A click on an address copies it. The clipboard tool is a fake that writes a file, and the
+# display variables are pinned, so running the suite never touches the real clipboard.
+fake_clip() {   # fake_clip [seconds]: a wl-copy that writes what it is given to ~/copied
+  mkdir -p "$HOME/clipbin"
+  printf '#!/bin/sh\nsleep %s\ncat > "$HOME/copied"\n' "${1:-0}" > "$HOME/clipbin/wl-copy"
+  chmod +x "$HOME/clipbin/wl-copy"
+}
+fake_clip
+clicked=$(PATH="$HOME/clipbin:$PATH" WAYLAND_DISPLAY=test DISPLAY= drive '\x1b[<0;25;3M')
+t  "a click on an address copies it"   "a@example.com"         cat "$HOME/copied"
+t  "and the view says it did"          "copied a@example.com"  echo "$clicked"
+t  "the terminal is asked as well"     "]52;c;YUBleGFtcGxlLmNvbQ==" echo "$clicked"
+rm -f "$HOME/copied"
+clicked=$(PATH="$HOME/clipbin:$PATH" WAYLAND_DISPLAY=test DISPLAY= drive '\x1b[<0;4;3M')
+t  "a click elsewhere on the row copies nothing" "nothing" \
+   bash -c 'cat "$1" 2>/dev/null || echo nothing' _ "$HOME/copied"
+clicked=$(WAYLAND_DISPLAY= DISPLAY= drive '\x1b[<0;25;3M')
+t  "with no clipboard tool it says so" "via the terminal"      echo "$clicked"
+t  "and still asks the terminal"       "]52;c;"                echo "$clicked"
+slow_copy() {   # a clipboard tool that hangs: the click must hand it off and return at once
+  fake_clip 1.5
+  PATH="$HOME/clipbin:$PATH" WAYLAND_DISPLAY=test DISPLAY= \
+  CCEX_BASE="$HOME/.claude" CCEX_ROOT="$CC_PROFILE_ROOT" \
+  PYTHONPATH="$(dirname "$CCEX")/../lib/py" python3 - <<'PYEOF' 2>/dev/null
+import time
+import watch
+v = watch.View(at=80)
+v.sample()
+v.frame(120, 20, colour=False)          # lays out the columns a click is matched against
+t = time.time()
+v.click(25, 3)
+took = time.time() - t
+print("returned in %s" % ("time" if took < 0.5 else "%.1fs" % took))
+print("then: %s" % v.note)
+time.sleep(2.5)
+print("later: %s" % v.note)
+PYEOF
+}
+slowed=$(slow_copy)
+t  "a slow clipboard does not hold the view" "returned in time"      echo "$slowed"
+t  "it says it is on its way"                "then: copying a@"      echo "$slowed"
+t  "and that it arrived once it has"         "later: copied a@example.com" echo "$slowed"
 t  "on the selected account"       "a@example.com"            cap_prompt ""
 t  "digits fill the 5h field"      "5h: 60"                   cap_prompt "60|"
 t  "then it asks for the week"     "weekly:"                  cap_prompt "60|"

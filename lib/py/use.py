@@ -3,9 +3,9 @@ import os, shutil, sys, time
 
 import burn
 from ccexlib import (BASE, REFUSED, ROOT, barred, canon, cfg_for, creds_for, email_for, expand,
-                     held, id_for, load, logged_in, note_switch, running_at, save, seed_into,
-                     step)
-from decide import FIVE_AT, cap, own, ranked, reads
+                     held, hm, id_for, load, logged_in, note_switch, running_at, save,
+                     seed_into, step)
+from decide import FIVE_AT, cap, expired, own, ranked, reads
 from usage import account_json, cached
 
 target = expand(sys.argv[1])
@@ -61,6 +61,7 @@ if refusal:
     sys.exit("ccex: %s is %s, so nothing can run on it; `ccex pool in %s` clears that record "
              "and tries it again" % (src_email, refusal, id_for(src_dir) or src_name))
 
+
 def taken(d):
     """Someone else's login is in here, and overwriting it would need a fresh browser sign-in."""
     if os.path.realpath(d) == os.path.realpath(src_dir):
@@ -73,6 +74,16 @@ def taken(d):
 # the switch it is about to undo.
 row = account_json(src_name, src_dir)
 at = running_at(FIVE_AT)
+
+# A parked slot keeps its credential file long after the refresh token inside it has died,
+# so "logged in" and "will still be logged in when you get there" are two different facts.
+# Rotation will not land on an expired one; naming it by hand must not either. The switch
+# itself would work -- that is the trap -- and the next thing typed would be a login prompt,
+# with whatever was running left behind it.
+if expired(row):
+    left = row["refresh_at"] - time.time()
+    sys.exit("ccex: %s's login %s; `ccex add %s` signs it back in"
+             % (src_email, "has expired" if left <= 0 else "expires in %s" % hm(left), src_name))
 
 
 def no_room(a):
