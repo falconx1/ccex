@@ -4,7 +4,7 @@ Nothing here spends quota or launches anything -- it only reads files. `limits.p
 the one thing that can cost a session (the pty probe); `watch.py` renders these numbers
 live. Both read them through here, so they never disagree.
 """
-import datetime, os, time
+import datetime, os, re, subprocess, sys, time
 
 import burn
 
@@ -23,20 +23,11 @@ _walk = (0.0, {})   # the last /proc walk, and when
 _busy = {}          # per account: (when we looked, what we found)
 
 
-def live_map(max_age=0.0):
-    """{config dir: [pids]} for every running Claude Code session, in one /proc pass.
-
-    `max_age` reuses a walk that recent instead of making another: reading cmdline and
-    environ for every process on the machine is the one expensive thing in here, and who
-    is running does not change between two questions asked a second apart.
-    """
-    global _walk
-    if max_age and time.time() - _walk[0] <= max_age:
-        return _walk[1]
+def proc_map(base):
+    """{config dir: [pids]} for every running Claude Code session, in one /proc pass."""
     out = {}
     if not os.path.isdir("/proc"):
         return out
-    base = os.path.realpath(BASE)
     for pid in os.listdir("/proc"):
         if not pid.isdigit():
             continue
@@ -51,8 +42,50 @@ def live_map(max_age=0.0):
             out.setdefault(os.path.realpath(cd) if cd else base, []).append(int(pid))
         except (OSError, ValueError):
             continue
-    _walk = (time.time(), out)
     return out
+
+
+def ps_map(base):
+    """The same map, asked of `ps` -- macOS has no /proc but does hand you your own env.
+
+    `-E` appends each process's environment to its command line, for processes of this user,
+    which is the one thing this needs: the config dir a running session was started with.
+    """
+    out = {}
+    try:
+        p = subprocess.run(["ps", "-Ewwo", "pid=,command="],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return out
+    if p.returncode != 0:
+        return out
+    for line in p.stdout.splitlines():
+        pid, _, rest = line.strip().partition(" ")
+        if not pid.isdigit() or not rest:
+            continue
+        if os.path.basename(rest.split(" ", 1)[0]) != "claude":
+            continue
+        hit = re.search(r"(?:^| )CLAUDE_CONFIG_DIR=(\S*)", rest)
+        cd = hit.group(1) if hit else ""
+        out.setdefault(os.path.realpath(cd) if cd else base, []).append(int(pid))
+    return out
+
+
+SCAN = ps_map if sys.platform == "darwin" else proc_map   # asked once, not once per walk
+
+
+def live_map(max_age=0.0):
+    """{config dir: [pids]} for every running Claude Code session, in one pass.
+
+    `max_age` reuses a walk that recent instead of making another: reading the command and
+    environment of every process on the machine is the one expensive thing in here, and who
+    is running does not change between two questions asked a second apart.
+    """
+    global _walk
+    if max_age and time.time() - _walk[0] <= max_age:
+        return _walk[1]
+    _walk = (time.time(), SCAN(os.path.realpath(BASE)))
+    return _walk[1]
 
 
 def live_sessions(d):

@@ -11,7 +11,7 @@ not permitted to run.
 """
 import json, os, pty, re, select, signal, subprocess, sys, time
 
-from ccexlib import (BASE, cfg_for, creds_for, email_for, is_base, load, note_probe,
+from ccexlib import (BASE, cfg_for, email_for, is_base, load, logged_in, note_probe,
                      save, seed_into)
 from usage import cached
 
@@ -156,7 +156,7 @@ def launch(d, timeout=None):
         cwd = trusted_dir(cfg)      # a profile that has never been live has trusted nothing
     if not cwd:
         return "untrusted"
-    if not os.path.exists(creds_for(d)):
+    if not logged_in(d):        # asked of the store, not of a file: macOS keeps no file
         return "nologin"
     pid, fd = pty.fork()
     if pid == 0:
