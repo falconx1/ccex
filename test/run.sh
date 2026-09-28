@@ -473,7 +473,9 @@ t  "and its checked numbers are reported"    "12% 5h"          echo "$out"
 teardown; setup
 fake_claude '{"b@example.com": [95, 20]}'
 age_numbers
-out=$("$CCEX" rotate --at 80 --no-verify 2>&1)
+# --no-launch too: otherwise the readout after the switch launches a session unless one is
+# already open, and whether the machine running this has one is not the thing under test
+out=$("$CCEX" rotate --at 80 --no-verify --no-launch 2>&1)
 t  "--no-verify asks nothing"                "b@example.com"   echo "$out"
 absent "and reports no check"                "checked just now" echo "$out"
 
@@ -1765,14 +1767,14 @@ matches "a parked slot is keyed by its directory"   'credentials-[0-9a-f]{8}$'  
 kc_distinct() { [ "$(kc_where bee)" = "$(kc_where cee)" ] && echo same || echo different; }
 t  "two slots never share an item"       "different"  kc_distinct
 t  "ls finds a login with no file behind it"  "c@example.com"  "$CCEX" ls
-t  "and reads the token out of the item"      "active"         "$CCEX" ls
+matches "and reads the token out of the item" '[0-9]+d [0-9]{2}h' "$CCEX" ls
 t  "with the login's own clock"               "REFRESH"        "$CCEX" ls -h
 
 "$CCEX" use bee --no-check >/dev/null 2>&1
 t  "use puts the incoming login in the live item"  "holds t-b@example.com"  kc_holds default
 t  "and parks the one that was live in its own"    "holds t-a@example.com"  kc_holds a
 t  "the slot that handed it over keeps none"       "holds nothing"          kc_holds bee
-t  "and ls says who is live now"                   "b@example.com"          bash -c '"$1" ls | awk "/\*/ {print \$4}"' _ "$CCEX"
+t  "and ls says who is live now"                   "b@example.com"          live_email
 
 stub_claude
 t  "add carries a login to the slot it names"  "parked as fresh"         adds fresh@example.com
